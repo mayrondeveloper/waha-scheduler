@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readStore, updateStore } from '../src/ui/store.js';
@@ -180,4 +190,45 @@ test('updateStore avisa quando o mutator não devolve o store', async () => {
   // Como a mutação nunca foi validada nem gravada, o arquivo não deve mudar.
   const final = readStore(path);
   assert.equal(final.messages.length, 0, 'arquivo não pode mudar quando o mutator não devolve nada');
+});
+
+// A escrita atômica é obrigatória pelo spec: o scheduler lê o mesmo arquivo a
+// qualquer momento e nunca pode pegá-lo pela metade. Os testes que citam
+// ".tmp" acima só afirmam que nenhum sobrou — o que é trivialmente verdade se
+// nenhum for criado: trocar `writeFileSync(tmp) + renameSync` por
+// `writeFileSync(path)` direto passava por todos eles. Este teste não passa:
+// ele observa a única coisa que distingue os dois caminhos de fora.
+
+test('a gravação é atômica: substitui o arquivo por rename, nunca reescreve por cima', async () => {
+  const path = newStorePath();
+  const conteudoAntes = readFileSync(path, 'utf8');
+  const inodeAntes = statSync(path).ino;
+
+  // Um leitor concorrente (o scheduler recarregando) pode estar com o arquivo
+  // já aberto quando a tela grava. Com .tmp + rename, esse descritor continua
+  // preso ao inode antigo e lê a versão anterior INTEIRA; com writeFileSync
+  // por cima do arquivo final, ele passa a enxergar o conteúdo novo — e, num
+  // arquivo maior que um bloco, leria metade de cada versão.
+  const fd = openSync(path, 'r');
+  try {
+    await updateStore(path, (store) => {
+      store.messages.push({ id: 'msg-a', name: 'Oi', text: 'Olá!' });
+      return store;
+    });
+
+    assert.equal(
+      readFileSync(fd, 'utf8'),
+      conteudoAntes,
+      'quem abriu o arquivo antes da gravação tem que continuar lendo a versão anterior inteira'
+    );
+  } finally {
+    closeSync(fd);
+  }
+
+  assert.notEqual(
+    statSync(path).ino,
+    inodeAntes,
+    'o arquivo precisa ser SUBSTITUÍDO (inode novo, vindo do rename), não reescrito no lugar'
+  );
+  assert.equal(readStore(path).messages.length, 1, 'e a versão nova tem que estar no arquivo');
 });
