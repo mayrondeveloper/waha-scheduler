@@ -28,6 +28,11 @@ const testRoutes = {
   'GET /api/boom': async () => {
     throw new Error("ENOENT: no such file or directory, open '/Users/x/data/schedules.json'");
   },
+  'GET /api/circular': async () => {
+    const body = {};
+    body.self = body; // referência circular: JSON.stringify(body) lança.
+    return { status: 200, body };
+  },
 };
 
 async function boot(t, schedulesPath, routes = {}) {
@@ -77,11 +82,19 @@ test('recusa travessia de diretório nos estáticos', async (t) => {
   }
 });
 
-test('o bind é sempre 127.0.0.1, mesmo com UI_HOST=0.0.0.0 no ambiente', async (t) => {
+test('loadConfig não expõe mais uiHost (UI_HOST não é lido)', () => {
   const cfg = loadConfig({ UI_HOST: '0.0.0.0', UI_PORT: '0' });
   assert.equal('uiHost' in cfg, false, 'uiHost não deve mais existir na config');
+});
 
-  const { server } = await startUi({ schedulesPath: newStore(), cfg });
+test('o bind é sempre 127.0.0.1, mesmo que cfg.uiHost venha preenchido com outro host', async (t) => {
+  // Não basta provar que uiHost sumiu de loadConfig: alguém pode montar um
+  // cfg manualmente (como startUi aceita) e injetar um host ali direto.
+  // O bind em startUi tem que ignorar cfg.uiHost de qualquer jeito.
+  const { server } = await startUi({
+    schedulesPath: newStore(),
+    cfg: { uiHost: '0.0.0.0', uiPort: 0 },
+  });
   t.after(() => server.close());
 
   assert.equal(server.address().address, '127.0.0.1');
@@ -154,14 +167,23 @@ test('JSON inválido no corpo responde 400', async (t) => {
   assert.equal(res.status, 400);
 });
 
-test('corpo acima do limite responde 413 e encerra a conexão', async (t) => {
+// Nome antigo ("...e encerra a conexão") e a asserção `socketClosed === true`
+// afirmavam provar que a correção derruba o socket — mas quem fecha o socket
+// nesse cenário é o próprio Node (`Connection: close` com corpo não
+// consumido), não `req.destroy()`: removendo o `req.destroy()` de
+// `sendJsonAndClose`, esse teste continuava verde. O que a correção de
+// verdade garante é que o servidor para de acumular bytes assim que passa de
+// MAX_BODY_BYTES, em vez de bufferizar o corpo de 1.5MB inteiro antes de
+// decidir — e isso este teste mede indiretamente pelo tempo de resposta.
+test('corpo acima do limite responde 413 sem esperar o corpo inteiro chegar', async (t) => {
   const call = await boot(t, newStore(), testRoutes);
 
   // Corpo bem maior que o limite (1MB), mandado de uma vez — como um
   // cliente que já tem os bytes prontos e só está fazendo upload.
   const big = Buffer.alloc(1_500_000, 'a');
+  const start = Date.now();
 
-  const { status, socketClosed } = await new Promise((resolve, reject) => {
+  const { status, elapsedMs } = await new Promise((resolve) => {
     const req = httpRequest({
       host: '127.0.0.1',
       port: call.port,
@@ -170,29 +192,46 @@ test('corpo acima do limite responde 413 e encerra a conexão', async (t) => {
       headers: { 'Content-Type': 'application/json', 'Content-Length': big.length },
     });
 
-    let status;
-    let socketClosed = false;
+    let settled = false;
+    const finish = (statusCode) => {
+      if (settled) return;
+      settled = true;
+      resolve({ status: statusCode, elapsedMs: Date.now() - start });
+    };
 
     req.on('response', (res) => {
-      status = res.statusCode;
       res.resume();
-      res.socket.on('close', () => {
-        socketClosed = true;
-        resolve({ status, socketClosed });
-      });
+      finish(res.statusCode);
     });
     req.on('error', () => {
-      // Escrever o restante do corpo depois que o servidor já respondeu e
-      // fechou a leitura é esperado (EPIPE/ECONNRESET) — não é falha do teste.
+      // Escrever o restante do corpo grande depois que o servidor já
+      // respondeu 413 e parou de ler pode gerar EPIPE/ECONNRESET do lado do
+      // cliente — esperado, não é falha do teste (e não é o que este teste
+      // está verificando).
     });
 
     req.end(big);
 
-    setTimeout(() => resolve({ status, socketClosed }), 2000);
+    // Rede de segurança: se a resposta nunca chegar, falha no assert.equal
+    // abaixo (status undefined) em vez de travar o teste.
+    setTimeout(() => finish(undefined), 3000);
   });
 
   assert.equal(status, 413);
-  assert.equal(socketClosed, true, 'a conexão deveria ter sido encerrada pelo servidor');
+  assert.ok(elapsedMs < 1000, `resposta demorou ${elapsedMs}ms, esperado bem menos que 1s`);
+});
+
+test('body não serializável responde 500 e não derruba o processo', async (t) => {
+  const call = await boot(t, newStore(), testRoutes);
+
+  const res = await call('/api/circular');
+  assert.equal(res.status, 500);
+
+  // Prova de que o processo segue vivo: uma requisição seguinte ainda
+  // funciona. Sem a correção, a rejeição não tratada de JSON.stringify
+  // depois de res.writeHead já ter saído derrubava o processo aqui.
+  const res2 = await call('/');
+  assert.equal(res2.status, 200);
 });
 
 test('parâmetro de rota inválido responde 400', async (t) => {

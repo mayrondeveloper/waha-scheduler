@@ -23,17 +23,55 @@ const STATIC_FILES = {
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
 };
 
+// Descreve qualquer valor lançado como texto útil para log — inclusive
+// quando o handler lança algo que não é Error (string, número, objeto
+// solto). `err.message` sozinho vira `undefined` nesses casos e, jogado
+// direto em `error(...)`, produz uma linha de log vazia (nunca engolir erro
+// em silêncio é regra do projeto).
+function describeError(err) {
+  if (err instanceof Error) return err.message || err.stack || String(err);
+  if (typeof err === 'string') return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+// Serializa antes de escrever qualquer coisa no response. Se `JSON.stringify`
+// falhar (referência circular, BigInt, etc.) depois do header já ter saído,
+// o erro vira ERR_HTTP_HEADERS_SENT — uma rejeição não tratada que derruba o
+// processo. Serializando primeiro, um body ruim vira 500 controlado.
+function serializeBody(body) {
+  try {
+    return JSON.stringify(body);
+  } catch (err) {
+    error(`Não foi possível serializar a resposta JSON: ${describeError(err)}`);
+    return null;
+  }
+}
+
 function sendJson(res, status, body) {
+  const payload = serializeBody(body);
+  if (payload === null) {
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'Erro interno do servidor.' }));
+    return;
+  }
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(body));
+  res.end(payload);
 }
 
 // Responde e, só depois de os bytes saírem para o socket, encerra a conexão —
 // usado quando o corpo estourou o limite, para não deixar o cliente continuar
 // mandando dados.
 function sendJsonAndClose(req, res, status, body) {
-  res.writeHead(status, { Connection: 'close', 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(body));
+  const payload = serializeBody(body);
+  const finalStatus = payload === null ? 500 : status;
+  const finalPayload = payload === null ? JSON.stringify({ error: 'Erro interno do servidor.' }) : payload;
+
+  res.writeHead(finalStatus, { Connection: 'close', 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(finalPayload);
   // Espera a resposta ser entregue e o restante do corpo em trânsito ser
   // drenado antes de derrubar o socket — encerrar cedo demais, com bytes
   // ainda não lidos no buffer do SO, gera RST e descarta a resposta.
@@ -180,12 +218,13 @@ export function createServer(options = {}) {
       const result = await handler.fn({ body, params: handler.params, url, schedulesPath, cfg });
       return sendJson(res, result.status ?? 200, result.body);
     } catch (err) {
-      error(err.message);
-      const status = err.status ?? 500;
+      const detail = describeError(err);
+      error(`Erro ao processar ${req.method} ${path}: ${detail}`);
+      const status = err?.status ?? 500;
       if (status === 413) {
-        return sendJsonAndClose(req, res, status, { error: err.message });
+        return sendJsonAndClose(req, res, status, { error: detail });
       }
-      const message = status >= 500 ? 'Erro interno do servidor.' : err.message;
+      const message = status >= 500 ? 'Erro interno do servidor.' : detail;
       return sendJson(res, status, { error: message });
     }
   });
