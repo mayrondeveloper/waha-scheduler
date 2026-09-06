@@ -912,6 +912,13 @@ git commit -m "Scheduler recarrega ao detectar mudança, preservando config vál
 
 ### Task 5: Servidor HTTP e estáticos
 
+> **Correção de segurança aplicada depois desta task (commit 32ed8b3).** O código abaixo
+> torna `UI_HOST` configurável, e isso é um furo: `UI_HOST=0.0.0.0` expõe a tela na LAN,
+> quebrando a premissa que dispensa autenticação. Na implementação final `UI_HOST` não
+> existe e o bind é sempre `127.0.0.1`, mais defesas contra CSRF, DNS rebinding, URL
+> malformada e corpo sem limite. Se este plano for reexecutado do zero, aplique a Task 5
+> já com essas defesas — não reintroduza a versão abaixo.
+
 A base da UI: `node:http` em `127.0.0.1`, roteador simples e servir os estáticos por lista fixa — sem montar caminho a partir da URL, para não abrir travessia de diretório.
 
 **Files:**
@@ -948,7 +955,7 @@ export function newStore(extra = {}) {
 }
 
 async function boot(t, schedulesPath) {
-  const { server, port } = await startUi({ schedulesPath, cfg: { uiHost: '127.0.0.1', uiPort: 0 } });
+  const { server, port } = await startUi({ schedulesPath, cfg: { uiPort: 0 } });
   t.after(() => server.close());
   return (path, init) => fetch(`http://127.0.0.1:${port}${path}`, init);
 }
@@ -1240,7 +1247,7 @@ function newStore(extra = {}) {
 }
 
 async function boot(t, schedulesPath) {
-  const { server, port } = await startUi({ schedulesPath, cfg: { uiHost: '127.0.0.1', uiPort: 0 } });
+  const { server, port } = await startUi({ schedulesPath, cfg: { uiPort: 0 } });
   t.after(() => server.close());
   return (path, init) => fetch(`http://127.0.0.1:${port}${path}`, init);
 }
@@ -1455,7 +1462,7 @@ function newStore(extra = {}) {
 }
 
 async function boot(t, schedulesPath) {
-  const { server, port } = await startUi({ schedulesPath, cfg: { uiHost: '127.0.0.1', uiPort: 0 } });
+  const { server, port } = await startUi({ schedulesPath, cfg: { uiPort: 0 } });
   t.after(() => server.close());
   return (path, init) => fetch(`http://127.0.0.1:${port}${path}`, init);
 }
@@ -1688,7 +1695,7 @@ async function boot(t) {
   t.after(() => mock.close());
 
   const cfg = {
-    uiHost: '127.0.0.1', uiPort: 0,
+    uiPort: 0,
     wahaUrl: `http://localhost:${PORT}`, session: 'default', apiKey: '',
     delayMinMs: 0, delayMaxMs: 0, logPath: join(dir, 'sends.jsonl'),
   };
@@ -1709,7 +1716,7 @@ test('lista grupos do WAHA já normalizados', async (t) => {
 
 test('WAHA fora do ar responde 502 sem derrubar o servidor', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'waha-off-'));
-  const cfg = { uiHost: '127.0.0.1', uiPort: 0, wahaUrl: 'http://localhost:3994',
+  const cfg = { uiPort: 0, wahaUrl: 'http://localhost:3994',
                 session: 'default', apiKey: '', logPath: join(dir, 'l.jsonl') };
   const { server, port } = await startUi({ schedulesPath: newStore(dir), cfg });
   t.after(() => server.close());
