@@ -268,7 +268,7 @@ function matchDynamic(routes, method, path) {
     if (patternParts.length !== pathParts.length) continue;
 
     const params = {};
-    let casou = true;
+    let matched = true;
     for (let i = 0; i < patternParts.length; i += 1) {
       const part = patternParts[i];
       if (part.startsWith(':')) {
@@ -280,12 +280,12 @@ function matchDynamic(routes, method, path) {
           throw err;
         }
       } else if (part !== pathParts[i]) {
-        casou = false;
+        matched = false;
         break;
       }
     }
 
-    if (casou) return { fn, params };
+    if (matched) return { fn, params };
   }
   return null;
 }

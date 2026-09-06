@@ -15,8 +15,8 @@ const $ = (sel) => document.querySelector(sel);
 // aspas e sinais de maior/menor; sem escapar, ele fecha o atributo e injeta
 // HTML/JS arbitrário na tela (XSS). TODA interpolação dentro de um atributo
 // tem que passar por aqui, sem exceção — não só a que "parece" texto livre.
-const escape = (texto) =>
-  String(texto).replace(/[&<>"']/g, (c) =>
+const escape = (value) =>
+  String(value).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
 

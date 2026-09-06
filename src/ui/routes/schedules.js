@@ -34,8 +34,8 @@ function parseSchedule(raw, context) {
 // sem "status" e cairia no 500 genérico. Checar aqui, antes de gravar, dá o
 // 400 com o texto certo e evita a escrita.
 function assertUniqueName(schedules, name, excludeId) {
-  const duplicado = schedules.some((s) => s.name === name && s.id !== excludeId);
-  if (duplicado) {
+  const isDuplicate = schedules.some((s) => s.name === name && s.id !== excludeId);
+  if (isDuplicate) {
     throw httpError(400, `Agendamento "${name}": nome duplicado.`);
   }
 }

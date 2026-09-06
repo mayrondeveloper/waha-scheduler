@@ -78,11 +78,11 @@ export const messageRoutes = {
 
       // Nunca excluir em cascata: um agendamento apontando para uma
       // mensagem apagada dispararia em silêncio com texto inexistente.
-      const emUso = store.schedules.filter((s) => s.messageId === params.id).map((s) => s.name);
-      if (emUso.length > 0) {
+      const usedBy = store.schedules.filter((s) => s.messageId === params.id).map((s) => s.name);
+      if (usedBy.length > 0) {
         throw httpError(
           409,
-          `Mensagem em uso por: ${emUso.join(', ')}. Desvincule antes de excluir.`
+          `Mensagem em uso por: ${usedBy.join(', ')}. Desvincule antes de excluir.`
         );
       }
 
