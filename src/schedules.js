@@ -14,28 +14,11 @@ function newId(prefix) {
   return `${prefix}-${randomUUID().slice(0, 8)}`;
 }
 
-/**
- * Gera um id determinístico a partir de uma semente estável (o nome do
- * agendamento). Usado na conversão de arquivos v1 para v2, para que duas
- * leituras do mesmo arquivo produzam sempre os mesmos ids — necessário para
- * que a API HTTP (tasks seguintes) possa fazer GET/PUT por id de forma
- * estável.
- * @param {string} prefix Prefixo do id ("msg" ou "sch").
- * @param {string} seed Texto usado como semente do hash (nome do agendamento).
- * @returns {string}
- */
 function stableId(prefix, seed) {
   const hash = createHash('sha1').update(seed).digest('hex').slice(0, 8);
   return `${prefix}-${hash}`;
 }
 
-/**
- * Rótulo usado em mensagens de erro: o nome, quando válido, senão a posição
- * ("#1", "#2", ...) quando o índice é conhecido, senão "(sem nome)".
- * @param {Record<string, unknown>} raw
- * @param {number} [index]
- * @returns {string}
- */
 function labelFor(raw, index) {
   if (raw && typeof raw.name === 'string' && raw.name.trim()) return raw.name.trim();
   return index != null ? `#${index + 1}` : '(sem nome)';
