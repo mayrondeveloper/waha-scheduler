@@ -6,7 +6,7 @@ const DEFAULTS = {
   WAHA_URL: 'http://localhost:3000',
   WAHA_SESSION: 'default',
   WAHA_API_KEY: '',
-  SCHEDULES_PATH: './schedules.json',
+  SCHEDULES_PATH: './data/schedules.json',
   LOG_PATH: './logs/sends.jsonl',
   DELAY_MIN_MS: '3000',
   DELAY_MAX_MS: '8000',

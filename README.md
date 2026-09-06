@@ -14,6 +14,7 @@ e registra cada tentativa de envio em um log JSONL.
 ```bash
 npm install
 cp .env.example .env
+mkdir -p data && cp schedules.example.json data/schedules.json
 ```
 
 Ajuste o `.env` com a URL e a sessão do seu WAHA.
@@ -27,7 +28,7 @@ Todas as opções vêm de variáveis de ambiente (ver `.env.example`):
 | `WAHA_URL` | `http://localhost:3000` | URL base da instância WAHA |
 | `WAHA_SESSION` | `default` | Nome da sessão do WhatsApp |
 | `WAHA_API_KEY` | vazio | Enviada no header `X-Api-Key` quando preenchida |
-| `SCHEDULES_PATH` | `./schedules.json` | Arquivo de agendamentos |
+| `SCHEDULES_PATH` | `./data/schedules.json` | Arquivo de agendamentos |
 | `LOG_PATH` | `./logs/sends.jsonl` | Log de envios em JSONL |
 | `DELAY_MIN_MS` | `3000` | Intervalo mínimo entre envios |
 | `DELAY_MAX_MS` | `8000` | Intervalo máximo entre envios |

@@ -6,7 +6,7 @@ test('aplica defaults quando o ambiente está vazio', () => {
   const cfg = loadConfig({});
   assert.equal(cfg.wahaUrl, 'http://localhost:3000');
   assert.equal(cfg.session, 'default');
-  assert.equal(cfg.schedulesPath, './schedules.json');
+  assert.equal(cfg.schedulesPath, './data/schedules.json');
   assert.equal(cfg.logPath, './logs/sends.jsonl');
   assert.equal(cfg.delayMinMs, 3000);
   assert.equal(cfg.delayMaxMs, 8000);

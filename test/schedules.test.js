@@ -83,7 +83,7 @@ test('arquivo ausente e JSON inválido geram erro com contexto', () => {
   assert.throws(() => loadSchedules(quebrado), /JSON inválido/);
 });
 
-test('schedules.json de exemplo do repositório é válido', () => {
-  const { schedules } = loadSchedules(join(projectRoot, 'schedules.json'));
+test('schedules.example.json do repositório é válido', () => {
+  const { schedules } = loadSchedules(join(projectRoot, 'schedules.example.json'));
   assert.ok(Array.isArray(schedules));
 });
