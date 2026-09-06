@@ -16,7 +16,8 @@
     "mock": "node harness/mock-waha.js",
     "harness": "node harness/run.js all",
     "list-groups": "node bin/list-groups.js",
-    "send-now": "node bin/send-now.js"
+    "send-now": "node bin/send-now.js",
+    "ui": "node src/ui/server.js"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
