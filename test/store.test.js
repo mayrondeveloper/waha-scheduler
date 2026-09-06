@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readStore, updateStore } from '../src/ui/store.js';
@@ -61,7 +61,13 @@ test('escritas concorrentes são serializadas, sem perder nenhuma', async () => 
 
   await Promise.all(
     Array.from({ length: 10 }, (_, i) =>
-      updateStore(path, (store) => {
+      updateStore(path, async (store) => {
+        // O mutator PRECISA ser assíncrono e ceder o controle (await) entre ler
+        // e alterar o store. Se toda a seção crítica de updateStore fosse
+        // síncrona, o event loop já serializaria as chamadas sozinho e este
+        // teste passaria mesmo com a fila (`queue`) removida — provando nada
+        // sobre a fila. Não "simplifique" isso tirando o await.
+        await new Promise((resolve) => setTimeout(resolve, 5));
         store.messages.push({ id: `msg-${i}`, name: `M${i}`, text: `texto ${i}` });
         return store;
       })
@@ -70,4 +76,108 @@ test('escritas concorrentes são serializadas, sem perder nenhuma', async () => 
 
   const final = readStore(path);
   assert.equal(final.messages.length, 10, 'nenhuma escrita pode ser perdida');
+});
+
+test('readStore lança erro em português com o caminho quando o arquivo não existe', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'waha-store-'));
+  const path = join(dir, 'nao-existe.json');
+
+  assert.throws(
+    () => readStore(path),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /Não foi possível ler/);
+      assert.ok(err.message.includes(path), 'mensagem deve conter o caminho do arquivo');
+      return true;
+    }
+  );
+});
+
+test('readStore lança erro em português com o caminho quando o JSON é malformado', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'waha-store-'));
+  const path = join(dir, 'schedules.json');
+  writeFileSync(path, '{ isso não é json válido');
+
+  assert.throws(
+    () => readStore(path),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /JSON inválido/);
+      assert.ok(err.message.includes(path), 'mensagem deve conter o caminho do arquivo');
+      return true;
+    }
+  );
+});
+
+test('não deixa arquivo .tmp para trás quando a gravação falha', async () => {
+  const path = newStorePath();
+
+  await assert.rejects(() =>
+    updateStore(path, (store) => {
+      // Simula uma falha durante a gravação (ex.: destino tomado por outro
+      // processo entre a leitura e o rename): troca o arquivo final por um
+      // diretório, o que faz o renameSync final falhar com EISDIR.
+      unlinkSync(path);
+      mkdirSync(path);
+      store.messages.push({ id: 'msg-x', name: 'X', text: 'x' });
+      return store;
+    })
+  );
+
+  const restos = readdirSync(join(path, '..')).filter((f) => f.endsWith('.tmp'));
+  assert.deepEqual(restos, [], 'nenhum .tmp pode sobrar, mesmo quando o rename falha');
+});
+
+test('uma escrita que falha não trava a fila: as válidas seguem sendo gravadas', async () => {
+  const path = newStorePath();
+
+  const results = await Promise.allSettled([
+    updateStore(path, (store) => {
+      store.messages.push({ id: 'msg-ok-1', name: 'OK1', text: 'ok um' });
+      return store;
+    }),
+    updateStore(path, (store) => {
+      store.schedules.push({ name: 'falha', cron: 'inválido', messageId: 'msg-ok-1' });
+      return store;
+    }),
+    updateStore(path, (store) => {
+      store.messages.push({ id: 'msg-ok-2', name: 'OK2', text: 'ok dois' });
+      return store;
+    }),
+    updateStore(path, (store) => {
+      store.messages.push({ id: 'msg-ok-3', name: 'OK3', text: 'ok três' });
+      return store;
+    }),
+  ]);
+
+  assert.equal(results[0].status, 'fulfilled', 'primeira escrita (válida) deveria ter sido gravada');
+  assert.equal(results[1].status, 'rejected', 'segunda escrita (cron inválida) deveria ter rejeitado');
+  assert.match(results[1].reason.message, /cron inválida/);
+  assert.equal(results[2].status, 'fulfilled', 'terceira escrita (válida) deveria ter sido gravada');
+  assert.equal(results[3].status, 'fulfilled', 'quarta escrita (válida) deveria ter sido gravada');
+
+  const final = readStore(path);
+  assert.equal(final.messages.length, 3, 'as três escritas válidas devem estar presentes, e só elas');
+});
+
+test('updateStore avisa quando o mutator não devolve o store', async () => {
+  const path = newStorePath();
+
+  await assert.rejects(
+    () =>
+      updateStore(path, (store) => {
+        // Muta in-place e "esquece" o return — erro comum de handler.
+        store.messages.push({ id: 'msg-a', name: 'Oi', text: 'Olá!' });
+      }),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /mutator/i);
+      assert.match(err.message, /não devolveu o store/);
+      return true;
+    }
+  );
+
+  // Como a mutação nunca foi validada nem gravada, o arquivo não deve mudar.
+  const final = readStore(path);
+  assert.equal(final.messages.length, 0, 'arquivo não pode mudar quando o mutator não devolve nada');
 });

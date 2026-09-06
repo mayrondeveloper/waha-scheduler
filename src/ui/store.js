@@ -34,13 +34,24 @@ export function readStore(path) {
  * Aplica uma mutação ao store e grava de forma atômica. Escritas concorrentes
  * são enfileiradas, então cada mutação enxerga o resultado da anterior.
  * @param {string} path Caminho do arquivo.
- * @param {(store: object) => object} mutator Recebe o store e devolve o novo.
+ * @param {(store: object) => (object | Promise<object>)} mutator Recebe o
+ *   store e devolve o novo. Pode ser assíncrono — o `await` sobre o retorno é
+ *   o ponto de cessão de controle dentro da seção crítica que torna a fila
+ *   necessária: sem ele, tudo entre a leitura e a gravação seria síncrono e o
+ *   event loop já serializaria as chamadas sozinho.
  * @returns {Promise<object>} O store gravado.
  */
 export function updateStore(path, mutator) {
   const run = async () => {
     const current = readStore(path);
-    const mutated = mutator(current);
+    const mutated = await mutator(current);
+
+    if (mutated === undefined) {
+      throw new Error(
+        `updateStore(${path}): o mutator não devolveu o store atualizado (retornou undefined). ` +
+          'Mutators que alteram o store in-place também precisam terminar com "return store".'
+      );
+    }
 
     // Revalida o resultado da mutação: a API não pode gravar algo que o
     // scheduler recusaria no boot.
