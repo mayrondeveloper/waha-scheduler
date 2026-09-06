@@ -244,3 +244,86 @@ test('watchFile close() impede callback pendente de disparar (sem timer sobrando
   await delay(WATCH_SETTLE_MS); // tempo de sobra para o timer ter disparado, se não tivesse sido limpo
   assert.equal(calls, 0, 'close() deveria impedir o callback pendente de disparar');
 });
+
+// --- Revisão final: o registro da recarga é atômico de verdade ---
+//
+// register() promete montar a geração nova INTEIRA antes de tocar na antiga,
+// para que uma falha no meio do laço deixe a configuração anterior intacta e
+// ativa. O teste que levava esse nome ("reload com config inválida preserva a
+// anterior") usa JSON quebrado, que falha em loadSchedules — antes de
+// register() sequer ser chamado. Mover o destroy() da geração antiga para
+// ANTES da criação da nova passava na suíte inteira.
+//
+// Para falhar DENTRO do laço sem tocar em src/: a expressão cron é validada
+// em loadSchedules contra o fuso da config do processo, enquanto register()
+// registra com o fuso do cfg injetado. Um cfg cujo timezone fica inválido
+// depois do boot faz scheduleCron lançar exatamente onde interessa — é o que
+// acontece de verdade quando node-cron recusa registrar o que o arquivo
+// aceitou.
+
+test('falha ao registrar na recarga preserva a geração anterior intacta', (t) => {
+  const path = newPath();
+  writeConfig(path, null); // só "primeiro"
+
+  const cfg = { timezone: 'UTC' };
+  const scheduler = startScheduler({ schedulesPath: path, cfg });
+  t.after(() => scheduler.stop());
+
+  assert.equal(getTasks().size, 1);
+  const oldTask = [...getTasks().values()][0];
+
+  cfg.timezone = 'Zona/Inexistente'; // o registro da geração nova vai lançar
+  writeConfig(path, '0 10 * * 1'); // config nova, perfeitamente válida no arquivo
+
+  const ok = scheduler.reload();
+
+  assert.equal(ok, false, 'a recarga tem que reportar falha');
+  assert.deepEqual(scheduler.activeNames, ['primeiro'], 'a geração anterior continua ativa');
+  assert.notEqual(
+    oldTask.getStatus(),
+    'destroyed',
+    'a task da geração anterior não pode ser destruída por uma recarga que nem chegou a registrar a nova'
+  );
+  assert.equal(getTasks().size, 1, 'nenhuma task a mais pode ter ficado no registro do node-cron');
+});
+
+test('falha no MEIO do laço destrói as tasks novas já criadas e preserva a geração anterior', (t) => {
+  const path = newPath();
+  writeConfig(path, null); // só "primeiro"
+
+  const cfg = { timezone: 'UTC' };
+  const scheduler = startScheduler({ schedulesPath: path, cfg });
+  t.after(() => scheduler.stop());
+
+  assert.equal(getTasks().size, 1);
+  const oldTask = [...getTasks().values()][0];
+
+  // Válido na primeira leitura, inválido daí em diante: na recarga, o
+  // agendamento "primeiro" da geração nova é criado e o "segundo" lança —
+  // a falha cai no meio do laço, com uma task nova já na mão.
+  let reads = 0;
+  Object.defineProperty(cfg, 'timezone', {
+    configurable: true,
+    get() {
+      reads += 1;
+      return reads === 1 ? 'UTC' : 'Zona/Inexistente';
+    },
+  });
+
+  writeConfig(path, '0 10 * * 1'); // agora com "primeiro" e "segundo"
+  const ok = scheduler.reload();
+
+  assert.equal(reads > 1, true, 'a recarga precisa ter chegado ao segundo agendamento');
+  assert.equal(ok, false, 'a recarga tem que reportar falha');
+  assert.deepEqual(scheduler.activeNames, ['primeiro'], 'a geração anterior continua ativa');
+  assert.notEqual(
+    oldTask.getStatus(),
+    'destroyed',
+    'a geração anterior não pode ser destruída por uma recarga que falhou no meio'
+  );
+  assert.equal(
+    getTasks().size,
+    1,
+    'a task nova já criada tem que ter sido destruída: só a geração anterior pode continuar registrada'
+  );
+});
