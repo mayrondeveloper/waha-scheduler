@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startMockWaha } from '../harness/mock-waha.js';
 import { startUi } from '../src/ui/server.js';
+import { getTasks } from 'node-cron';
 
 const PORT = 3995;
 
@@ -226,4 +227,41 @@ test('preview de cron devolve os próximos disparos', async (t) => {
   const ruim = await (await call('/api/cron/preview?expr=' + encodeURIComponent('não-é-cron'))).json();
   assert.equal(ruim.valid, false);
   assert.deepEqual(ruim.next, []);
+});
+
+// A rota cria a task só para consultar getNextRuns() e promete destruí-la
+// em seguida (comentário em src/ui/routes/actions.js), mas isso nunca tinha
+// teste — nem para o caminho feliz, nem para quando o cálculo dos próximos
+// disparos lança. "0 0 31W 2 *" (dia útil mais próximo do dia 31 de
+// fevereiro) passa por validate() — a checagem estática de node-cron não
+// cobre o token "W" — mas nunca corresponde a nenhuma data real; node-cron
+// procura por 100 anos e desiste lançando. Isso derruba a rota (500, sem
+// passar em silêncio — consistente com a regra do projeto), mas a garantia
+// que importa aqui é: node-cron não pode ficar com essa task presa no
+// registro global (getTasks()) depois da falha.
+test('preview com cron que nunca casa com nenhuma data não deixa task pendurada no registro do node-cron', async (t) => {
+  const { call } = await boot(t);
+  const antes = getTasks().size;
+
+  const res = await call('/api/cron/preview?expr=' + encodeURIComponent('0 0 31W 2 *'));
+  assert.equal(res.status, 500, 'não há como calcular os próximos disparos: tem que reportar erro, não 200 silencioso');
+
+  assert.equal(getTasks().size, antes, 'nenhuma task pode continuar registrada após a falha');
+});
+
+// A task criada pela rota só serve para consultar getNextRuns() — o
+// callback passado a ela é um no-op e nunca chama broadcast/sendText. Prova
+// disso: um cron que casa com "agora mesmo" (todo segundo) não gera NENHUMA
+// chamada ao mock do WAHA, mesmo esperando além do próximo tick — a task é
+// destruída antes de ter chance de disparar de verdade.
+test('preview nunca dispara envio de verdade, mesmo com um cron que casa imediatamente', async (t) => {
+  const { call, calls } = await boot(t);
+
+  const res = await call('/api/cron/preview?expr=' + encodeURIComponent('* * * * * *'));
+  assert.equal(res.status, 200);
+  const corpo = await res.json();
+  assert.equal(corpo.valid, true);
+
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.equal(calls.length, 0, 'o preview não pode ter disparado nenhum envio de verdade pelo mock');
 });

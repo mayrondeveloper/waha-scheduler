@@ -10,18 +10,18 @@
     <header>
       <h1>waha-scheduler</h1>
       <nav>
-        <button data-aba="agendamentos" class="ativa">Agendamentos</button>
-        <button data-aba="mensagens">Mensagens</button>
-        <button data-aba="historico">Histórico</button>
+        <button data-tab="schedules" class="active">Agendamentos</button>
+        <button data-tab="messages">Mensagens</button>
+        <button data-tab="history">Histórico</button>
       </nav>
     </header>
 
-    <p id="aviso" hidden></p>
+    <p id="notice" hidden></p>
 
     <main>
-      <section id="agendamentos"></section>
-      <section id="mensagens" hidden></section>
-      <section id="historico" hidden></section>
+      <section id="schedules"></section>
+      <section id="messages" hidden></section>
+      <section id="history" hidden></section>
     </main>
 
     <script type="module" src="/app.js"></script>
