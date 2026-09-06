@@ -7,7 +7,23 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <main id="app"></main>
+    <header>
+      <h1>waha-scheduler</h1>
+      <nav>
+        <button data-aba="agendamentos" class="ativa">Agendamentos</button>
+        <button data-aba="mensagens">Mensagens</button>
+        <button data-aba="historico">Histórico</button>
+      </nav>
+    </header>
+
+    <p id="aviso" hidden></p>
+
+    <main>
+      <section id="agendamentos"></section>
+      <section id="mensagens" hidden></section>
+      <section id="historico" hidden></section>
+    </main>
+
     <script type="module" src="/app.js"></script>
   </body>
 </html>

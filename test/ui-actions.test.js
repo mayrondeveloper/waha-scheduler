@@ -214,3 +214,16 @@ test('GET /api/logs?limit=1e9 é capado no teto de 1000, não devolve o log inte
   assert.equal(logs.length, 1000,
     `limit=1e9 deveria ser capado em 1000, e não devolver as ${total} linhas do log`);
 });
+
+test('preview de cron devolve os próximos disparos', async (t) => {
+  const { call } = await boot(t);
+
+  const ok = await (await call('/api/cron/preview?expr=' + encodeURIComponent('0 9 * * 1'))).json();
+  assert.equal(ok.valid, true);
+  assert.equal(ok.next.length, 3);
+  assert.ok(new Date(ok.next[0]) > new Date(), 'o primeiro disparo tem que ser no futuro');
+
+  const ruim = await (await call('/api/cron/preview?expr=' + encodeURIComponent('não-é-cron'))).json();
+  assert.equal(ruim.valid, false);
+  assert.deepEqual(ruim.next, []);
+});

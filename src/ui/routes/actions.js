@@ -1,6 +1,7 @@
 // Rotas de apoio da tela: grupos do WAHA, histórico e disparo imediato.
 
 import { readFileSync, existsSync } from 'node:fs';
+import { schedule as scheduleCron, validate as isValidCron } from 'node-cron';
 import { readStore } from '../store.js';
 import { listGroups } from '../../waha/client.js';
 import { broadcast } from '../../broadcast.js';
@@ -73,5 +74,19 @@ export const actionRoutes = {
     });
 
     return { body: { sent, failed, results } };
+  },
+
+  'GET /api/cron/preview': async ({ url }) => {
+    const expr = url.searchParams.get('expr') ?? '';
+    if (!isValidCron(expr)) return { body: { valid: false, next: [] } };
+
+    // Cria a task só para consultar os próximos disparos e a destrói em seguida.
+    const task = scheduleCron(expr, () => {});
+    try {
+      const next = task.getNextRuns(3).map((d) => new Date(d).toISOString());
+      return { body: { valid: true, next } };
+    } finally {
+      task.destroy();
+    }
   },
 };
