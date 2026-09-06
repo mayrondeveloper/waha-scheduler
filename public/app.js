@@ -111,13 +111,32 @@ function scheduleForm() {
     .map((m) => `<option value="${escape(m.id)}" ${m.id === s.messageId ? 'selected' : ''}>${escape(m.name)}</option>`)
     .join('');
 
+  // Um grupo já salvo no agendamento que o WAHA não lista (o bot saiu do
+  // grupo, a sessão reconectou com a lista parcial, o id foi digitado à mão)
+  // continua aparecendo no formulário, marcado e sinalizado. Se ele sumisse
+  // daqui, formGroups() devolveria uma lista sem ele e a API — que troca
+  // lista vazia por defaultGroups — passaria a mandar a mensagem para outro
+  // grupo, sem aviso nenhum, num save que só queria renomear o agendamento.
+  // Destino já salvo nunca é descartado em silêncio: quem decide é o usuário.
+  const saved = s.groups ?? [];
+  const missing = saved.filter((id) => !state.groups.some((g) => g.id === id));
+
+  const checkbox = (id, name, notFound) => `
+        <label class="${notFound ? 'group-missing' : ''}">
+          <input type="checkbox" name="group" value="${escape(id)}" ${saved.includes(id) ? 'checked' : ''} />
+          ${escape(name)} <small>${escape(id)}</small>
+          ${notFound ? '<small class="warn">não encontrado na lista atual do WAHA</small>' : ''}
+        </label>`;
+
   const groupsMarkup = state.groups.length > 0
-    ? state.groups.map((g) => `
-        <label>
-          <input type="checkbox" name="group" value="${escape(g.id)}" ${s.groups?.includes(g.id) ? 'checked' : ''} />
-          ${escape(g.name)} <small>${escape(g.id)}</small>
-        </label>`).join('')
-    : `<input type="text" id="groups-text" value="${escape((s.groups ?? []).join(','))}"
+    ? [
+        // Os não encontrados primeiro: é o que o usuário precisa decidir.
+        ...missing.map((id) => checkbox(id, id, true)),
+        ...state.groups.map((g) => checkbox(g.id, g.name, false)),
+      ].join('')
+    // Sem lista nenhuma do WAHA, o campo livre já vem preenchido com os ids
+    // salvos — também aqui nada é perdido por o WAHA estar fora do ar.
+    : `<input type="text" id="groups-text" value="${escape(saved.join(','))}"
               placeholder="ids separados por vírgula" />`;
 
   return `

@@ -46,3 +46,8 @@ fieldset label { display: block; font-weight: 400; margin: 0; }
 .empty { opacity: .7; padding: 1rem 0; }
 
 button:disabled { cursor: not-allowed; opacity: .6; }
+
+/* Grupo que está salvo no agendamento mas não veio na lista atual do WAHA:
+   fica visível e marcado, para o usuário decidir — nunca sumir em silêncio. */
+fieldset label.group-missing { color: var(--erro); }
+fieldset label.group-missing .warn { font-weight: 600; }
