@@ -1,6 +1,10 @@
 node_modules/
 logs/
 data/
+# Quem já usava o projeto tem um schedules.json na raiz com ids de grupo
+# reais: ele deixou de ser rastreado (virou schedules.example.json) e o
+# repositório é público — sem esta linha, um `git add .` publicaria os ids.
+/schedules.json
 .env
 .DS_Store
 npm-debug.log*

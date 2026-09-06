@@ -19,6 +19,23 @@ mkdir -p data && cp schedules.example.json data/schedules.json
 
 Ajuste o `.env` com a URL e a sessão do seu WAHA.
 
+### Já usava o projeto antes da tela?
+
+Os agendamentos saíram da raiz do repositório para `data/`, que fica fora do
+versionamento. Quem tem um `schedules.json` na raiz com ids de grupo reais
+precisa movê-lo:
+
+```bash
+mkdir -p data && mv schedules.json data/schedules.json
+```
+
+O arquivo na raiz era rastreado pelo git e deixou de ser (virou
+`schedules.example.json`, com ids de exemplo). Se preferir mantê-lo onde
+está, aponte `SCHEDULES_PATH=./schedules.json` no `.env` — o `.gitignore`
+já ignora a raiz, para que um `git add .` não publique seus ids num
+repositório público. Nada mais muda: o formato antigo continua sendo lido, e
+a porta da tela agora é `3010` (era `3000`, a mesma do WAHA).
+
 ## Configuração
 
 Todas as opções vêm de variáveis de ambiente (ver `.env.example`):
