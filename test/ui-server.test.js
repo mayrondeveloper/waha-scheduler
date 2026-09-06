@@ -28,6 +28,13 @@ const testRoutes = {
   'GET /api/boom': async () => {
     throw new Error("ENOENT: no such file or directory, open '/Users/x/data/schedules.json'");
   },
+  // 5xx que a aplicação escolhe de propósito, com mensagem própria — é o
+  // que a rota GET /api/groups faz quando o WAHA não responde.
+  'GET /api/upstream': async () => {
+    const err = new Error('Erro 500 ao listar grupos em http://localhost:3994: sessão desconectada');
+    err.status = 502;
+    throw err;
+  },
   'GET /api/circular': async () => {
     const body = {};
     body.self = body; // referência circular: JSON.stringify(body) lança.
@@ -274,6 +281,24 @@ test('erro 5xx não vaza caminho de arquivo na resposta', async (t) => {
   const json = await res.json();
   assert.ok(!json.error.includes('/'), `mensagem não pode conter caminho: ${json.error}`);
   assert.ok(!/ENOENT/.test(json.error));
+  assert.equal(json.error, 'Erro interno do servidor.', 'erro inesperado continua genérico');
+});
+
+// O sanitizador transformava TODO status >= 500 em "Erro interno do
+// servidor.", inclusive o 502 que a aplicação monta de propósito com a causa
+// vinda do WAHA — a tela mostrava "Lista de grupos indisponível: Erro interno
+// do servidor.", sem diagnóstico nenhum. A exceção vale só para status que a
+// aplicação define deliberadamente, nunca para erro interno inesperado (o
+// teste acima prende essa metade).
+test('502 deliberado entrega a mensagem real, com a causa', async (t) => {
+  const call = await boot(t, newStore(), testRoutes);
+
+  const res = await call('/api/upstream');
+  assert.equal(res.status, 502);
+
+  const json = await res.json();
+  assert.match(json.error, /sessão desconectada/, 'a causa tem que chegar à tela');
+  assert.notEqual(json.error, 'Erro interno do servidor.');
 });
 
 test('corpo UTF-8 partido entre dois chunks TCP chega íntegro', async (t) => {

@@ -77,6 +77,8 @@ test('WAHA fora do ar responde 502 sem derrubar o servidor', async (t) => {
 
   const res = await fetch(`http://127.0.0.1:${port}/api/groups`);
   assert.equal(res.status, 502);
+  assert.match((await res.json()).error, /localhost:3994/,
+    'o 502 tem que dizer o que houve com o WAHA, não "Erro interno do servidor."');
 
   const ok = await fetch(`http://127.0.0.1:${port}/api/schedules`);
   assert.equal(ok.status, 200, 'o servidor tem que continuar de pé');

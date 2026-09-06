@@ -18,6 +18,14 @@ const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'pu
 const MAX_BODY_BYTES = 1_000_000;
 const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
+// Status 5xx que a APLICAÇÃO escolhe deliberadamente, com mensagem escrita
+// por nós: hoje só o 502 de "o WAHA não respondeu", cuja mensagem é o
+// diagnóstico que o usuário precisa ler na tela ("Lista de grupos
+// indisponível: Erro interno do servidor." não diz nada). Qualquer outro
+// 5xx continua genérico — é erro inesperado, e foi um deles que já vazou
+// caminho absoluto do servidor na resposta. Nunca acrescente 500 aqui.
+const DELIBERATE_5XX = new Set([502]);
+
 // Lista fixa: o caminho servido nunca é montado a partir da URL.
 const STATIC_FILES = {
   '/': ['index.html', 'text/html; charset=utf-8'],
@@ -231,7 +239,7 @@ export function createServer(options = {}) {
       if (status === 413) {
         return sendJsonAndClose(req, res, status, { error: detail });
       }
-      const message = status >= 500 ? 'Erro interno do servidor.' : detail;
+      const message = status >= 500 && !DELIBERATE_5XX.has(status) ? 'Erro interno do servidor.' : detail;
       return sendJson(res, status, { error: message });
     }
   });
