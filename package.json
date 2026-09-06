@@ -17,7 +17,8 @@
     "harness": "node harness/run.js all",
     "list-groups": "node bin/list-groups.js",
     "send-now": "node bin/send-now.js",
-    "ui": "node src/ui/server.js"
+    "ui": "node src/ui/server.js",
+    "dev": "node harness/mock-waha.js & WAHA_URL=http://localhost:3999 npm run ui"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
