@@ -23,6 +23,20 @@ function parseMessage(raw) {
   }
 }
 
+// O README promete "name" único entre mensagens, mas nada verificava isso:
+// normalizeStore só confere id duplicado. Duas mensagens com o mesmo nome e
+// textos diferentes viram duas opções idênticas no <select> do formulário de
+// agendamento — o usuário escolhe a errada e o grupo recebe o texto errado.
+// Mesmo padrão de assertUniqueName dos agendamentos (src/ui/routes/schedules.js),
+// inclusive o cuidado de não acusar um registro de ser duplicata de si mesmo
+// ao editar.
+function assertUniqueName(messages, name, excludeId) {
+  const isDuplicate = messages.some((m) => m.name === name && m.id !== excludeId);
+  if (isDuplicate) {
+    throw httpError(400, `Mensagem "${name}": nome duplicado.`);
+  }
+}
+
 /**
  * Rotas da biblioteca de mensagens, no formato consumido por createServer.
  * @type {Record<string, (ctx: object) => Promise<{status?: number, body: unknown}>>}
@@ -37,6 +51,7 @@ export const messageRoutes = {
     const saved = await updateStore(schedulesPath, (store) => {
       // id sempre gerado no servidor: o cliente não escolhe identidade.
       created = parseMessage({ name: body.name, text: body.text });
+      assertUniqueName(store.messages, created.name, created.id);
       store.messages.push(created);
       return store;
     });
@@ -48,11 +63,9 @@ export const messageRoutes = {
       const index = store.messages.findIndex((m) => m.id === params.id);
       if (index === -1) throw httpError(404, `Mensagem "${params.id}" não encontrada.`);
 
-      store.messages[index] = parseMessage({
-        id: params.id,
-        name: body.name,
-        text: body.text,
-      });
+      const updated = parseMessage({ id: params.id, name: body.name, text: body.text });
+      assertUniqueName(store.messages, updated.name, params.id);
+      store.messages[index] = updated;
       return store;
     });
     return { body: saved.messages.find((m) => m.id === params.id) };

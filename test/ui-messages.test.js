@@ -84,3 +84,40 @@ test('excluir mensagem inexistente responde 404', async (t) => {
   const res = await call('/api/messages/msg-fantasma', del());
   assert.equal(res.status, 404);
 });
+
+// O README promete "name" único entre mensagens; sem esta validação, duas
+// mensagens homônimas com textos diferentes viravam duas opções idênticas no
+// <select> do formulário de agendamento — o usuário escolhe a errada e o
+// grupo recebe o texto errado.
+
+test('criar mensagem com nome já usado responde 400, nomeia o conflito e não grava', async (t) => {
+  const call = await boot(t, newStore());
+
+  const res = await call('/api/messages', json('POST', { name: 'Oi', text: 'Outro texto!' }));
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /"Oi".*duplicado/);
+
+  const lista = await (await call('/api/messages')).json();
+  assert.equal(lista.length, 1, 'a segunda tentativa não pode ter gravado nada');
+  assert.equal(lista[0].text, 'Olá!', 'a mensagem original não pode ter sido alterada');
+});
+
+test('renomear mensagem para um nome já usado por outra responde 400', async (t) => {
+  const call = await boot(t, newStore());
+  const criada = await (await call('/api/messages', json('POST', { name: 'Tchau', text: 'Até!' }))).json();
+
+  const res = await call(`/api/messages/${criada.id}`, json('PUT', { name: 'Oi', text: 'Até!' }));
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /duplicado/);
+
+  const lista = await (await call('/api/messages')).json();
+  assert.equal(lista.find((m) => m.id === criada.id).name, 'Tchau', 'o nome não pode ter mudado');
+});
+
+test('editar mensagem mantendo o próprio nome continua permitido', async (t) => {
+  const call = await boot(t, newStore());
+
+  const res = await call('/api/messages/msg-a', json('PUT', { name: 'Oi', text: 'Olá de novo!' }));
+  assert.equal(res.status, 200, 'um registro não pode ser acusado de ser duplicata de si mesmo');
+  assert.equal((await res.json()).text, 'Olá de novo!');
+});
