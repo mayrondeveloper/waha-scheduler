@@ -1,0 +1,25 @@
+{
+  "name": "waha-scheduler",
+  "version": "1.0.0",
+  "description": "Agendador de mensagens para grupos de WhatsApp via WAHA",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "waha-list-groups": "bin/list-groups.js",
+    "waha-send-now": "bin/send-now.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
+    "mock": "node harness/mock-waha.js",
+    "harness": "node harness/run.js all",
+    "list-groups": "node bin/list-groups.js",
+    "send-now": "node bin/send-now.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "node-cron": "^4.2.1"
+  }
+}

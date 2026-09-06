@@ -1,0 +1,14 @@
+{
+  "defaultGroups": [
+    "000000000000000000@g.us"
+  ],
+  "schedules": [
+    {
+      "name": "bom-dia-segunda",
+      "cron": "0 9 * * 1",
+      "message": "Bom dia! Segue o resumo da semana.",
+      "groups": ["000000000000000000@g.us"],
+      "enabled": false
+    }
+  ]
+}
