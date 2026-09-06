@@ -51,6 +51,7 @@ async function boot(t) {
     uiPort: 0,
     wahaUrl: `http://localhost:${PORT}`, session: 'default', apiKey: '',
     delayMinMs: 0, delayMaxMs: 0, logPath: join(dir, 'sends.jsonl'),
+    timezone: 'America/Sao_Paulo',
   };
   const { server, port } = await startUi({ schedulesPath: newStore(dir), cfg });
   t.after(() => server.close());
@@ -229,24 +230,56 @@ test('preview de cron devolve os próximos disparos', async (t) => {
   assert.deepEqual(ruim.next, []);
 });
 
-// A rota cria a task só para consultar getNextRuns() e promete destruí-la
-// em seguida (comentário em src/ui/routes/actions.js), mas isso nunca tinha
-// teste — nem para o caminho feliz, nem para quando o cálculo dos próximos
-// disparos lança. "0 0 31W 2 *" (dia útil mais próximo do dia 31 de
-// fevereiro) passa por validate() — a checagem estática de node-cron não
-// cobre o token "W" — mas nunca corresponde a nenhuma data real; node-cron
-// procura por 100 anos e desiste lançando. Isso derruba a rota (500, sem
-// passar em silêncio — consistente com a regra do projeto), mas a garantia
-// que importa aqui é: node-cron não pode ficar com essa task presa no
-// registro global (getTasks()) depois da falha.
-test('preview com cron que nunca casa com nenhuma data não deixa task pendurada no registro do node-cron', async (t) => {
+// A rota cria a task só para consultar getNextRuns() e promete destruí-la em
+// seguida (comentário em src/ui/routes/actions.js). O teste que media isso
+// usava "0 0 31W 2 *", que lança DENTRO do próprio scheduleCron — a task nem
+// chega a ser registrada, então a medição passava por vacuidade. Com um
+// preview VÁLIDO, a task é de fato criada, e o registro global do node-cron
+// só volta ao tamanho anterior se a rota destruí-la.
+test('preview válido não deixa task pendurada no registro do node-cron', async (t) => {
+  const { call } = await boot(t);
+  const antes = getTasks().size;
+
+  const res = await call('/api/cron/preview?expr=' + encodeURIComponent('0 9 * * 1'));
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).next.length, 3);
+
+  assert.equal(getTasks().size, antes,
+    'a task criada só para calcular os próximos disparos tem que ter sido destruída');
+});
+
+// "0 0 31W 2 *" (dia útil mais próximo do dia 31 de fevereiro) passa por
+// validate() — a checagem estática do node-cron não cobre o token "W" — mas
+// nunca casa com data nenhuma, e schedule() lança ao tentar registrá-la.
+// Antes isso virava 500 "Erro interno do servidor" no preview; agora a rota
+// responde como inválida, com o motivo, igual ao que a gravação faz.
+test('preview de cron que nunca casa com nenhuma data responde inválido com motivo, não 500', async (t) => {
   const { call } = await boot(t);
   const antes = getTasks().size;
 
   const res = await call('/api/cron/preview?expr=' + encodeURIComponent('0 0 31W 2 *'));
-  assert.equal(res.status, 500, 'não há como calcular os próximos disparos: tem que reportar erro, não 200 silencioso');
+  assert.equal(res.status, 200);
 
-  assert.equal(getTasks().size, antes, 'nenhuma task pode continuar registrada após a falha');
+  const corpo = await res.json();
+  assert.equal(corpo.valid, false);
+  assert.deepEqual(corpo.next, []);
+  assert.ok(corpo.reason, 'o usuário precisa ver por que a expressão não serve');
+
+  assert.equal(getTasks().size, antes, 'nenhuma task pode continuar registrada');
+});
+
+// O preview usava scheduleCron SEM timezone enquanto o scheduler registra com
+// { timezone: cfg.timezone }: num VPS em UTC com TIMEZONE=America/Sao_Paulo —
+// o caso normal — os "próximos 3 disparos" saíam errados pelo offset inteiro.
+test('preview calcula os disparos no fuso configurado, o mesmo que o scheduler usa', async (t) => {
+  const { call } = await boot(t); // cfg.timezone = America/Sao_Paulo
+
+  const emSaoPaulo = await (await call('/api/cron/preview?expr=' + encodeURIComponent('0 9 * * 1'))).json();
+  assert.equal(emSaoPaulo.valid, true);
+  for (const iso of emSaoPaulo.next) {
+    assert.match(iso, /T12:00:00\.000Z$/,
+      '09:00 em America/Sao_Paulo é 12:00Z — se sair 09:00Z, o preview ignorou o fuso');
+  }
 });
 
 // A task criada pela rota só serve para consultar getNextRuns() — o

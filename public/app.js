@@ -221,12 +221,15 @@ async function updatePreview(expr) {
   }
 
   try {
-    const { valid, next } = await api(`/cron/preview?expr=${encodeURIComponent(expr)}`);
+    const { valid, next, reason } = await api(`/cron/preview?expr=${encodeURIComponent(expr)}`);
     if (token !== previewToken) return; // resposta obsoleta: já existe uma digitação mais recente.
 
     el.className = valid ? 'preview' : 'preview invalid';
     if (!valid) {
-      el.textContent = 'Expressão cron inválida';
+      // "reason" só vem quando a expressão passa na checagem estática mas o
+      // node-cron recusa registrá-la (ex.: "0 0 31W 2 *"): é a única pista
+      // que o usuário tem de por que aquela expressão não serve.
+      el.textContent = reason ? `Expressão cron inválida: ${reason}` : 'Expressão cron inválida';
     } else if (next.length === 0) {
       el.textContent = 'Nenhum disparo previsto';
     } else {

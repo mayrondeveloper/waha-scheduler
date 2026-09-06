@@ -1,8 +1,9 @@
 // Rotas de apoio da tela: grupos do WAHA, histórico e disparo imediato.
 
 import { readFileSync, existsSync } from 'node:fs';
-import { schedule as scheduleCron, validate as isValidCron } from 'node-cron';
+import { schedule as scheduleCron } from 'node-cron';
 import { readStore } from '../store.js';
+import { checkCron } from '../../schedules.js';
 import { listGroups } from '../../waha/client.js';
 import { broadcast } from '../../broadcast.js';
 
@@ -76,12 +77,20 @@ export const actionRoutes = {
     return { body: { sent, failed, results } };
   },
 
-  'GET /api/cron/preview': async ({ url }) => {
+  'GET /api/cron/preview': async ({ url, cfg }) => {
     const expr = url.searchParams.get('expr') ?? '';
-    if (!isValidCron(expr)) return { body: { valid: false, next: [] } };
 
-    // Cria a task só para consultar os próximos disparos e a destrói em seguida.
-    const task = scheduleCron(expr, () => {});
+    // Mesma checagem que a gravação faz: uma expressão que o node-cron
+    // recusa registrar aparece aqui como inválida, com o motivo, em vez de
+    // estourar um 500 sem causa bem onde o usuário precisa entender o erro.
+    const check = checkCron(expr, cfg.timezone);
+    if (!check.valid) return { body: { valid: false, next: [], reason: check.reason } };
+
+    // Cria a task só para consultar os próximos disparos e a destrói em
+    // seguida. O fuso é o MESMO com que o scheduler registra: sem ele, num
+    // VPS em UTC com TIMEZONE=America/Sao_Paulo, os "próximos disparos"
+    // sairiam errados pelo offset inteiro.
+    const task = scheduleCron(expr, () => {}, { timezone: cfg.timezone });
     try {
       const next = task.getNextRuns(3).map((d) => new Date(d).toISOString());
       return { body: { valid: true, next } };

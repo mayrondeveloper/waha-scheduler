@@ -140,3 +140,17 @@ test('renomear agendamento para um nome já usado por outro responde 400', async
   assert.equal(res.status, 400);
   assert.match((await res.json()).error, /duplicado/);
 });
+
+// A tela aceitava (201) um cron que só validate() aprova — "0 0 31W 2 *" — e
+// o próximo boot do scheduler abortava por causa dele, sem outra saída além
+// de editar o JSON na mão.
+test('cron que o node-cron recusa registrar responde 400 e não grava', async (t) => {
+  const call = await boot(t, newStore());
+
+  const res = await call('/api/schedules', json('POST', { ...novo, cron: '0 0 31W 2 *' }));
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /não é registrável/);
+
+  assert.deepEqual(await (await call('/api/schedules')).json(), [],
+    'nada pode ter sido gravado: é justamente o arquivo que faria o boot abortar');
+});

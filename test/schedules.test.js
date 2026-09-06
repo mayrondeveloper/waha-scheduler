@@ -6,7 +6,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-import { loadSchedules, validateMessage, validateSchedule, normalizeStore } from '../src/schedules.js';
+import { checkCron, loadSchedules, validateMessage, validateSchedule, normalizeStore } from '../src/schedules.js';
+import { getTasks } from 'node-cron';
 
 function writeSchedules(content) {
   const dir = mkdtempSync(join(tmpdir(), 'waha-sched-'));
@@ -254,4 +255,34 @@ test('groups: [] explícito herda defaultGroups', () => {
   });
 
   assert.deepEqual(loadSchedules(path).schedules[0].groups, ['1@g.us', '2@g.us']);
+});
+
+// A validação só chamava validate(), a checagem estática do node-cron.
+// "0 0 31W 2 *" (dia útil mais próximo do dia 31 de fevereiro) passa nela mas
+// nunca casa com data nenhuma: schedule() lança ao tentar registrá-la. A tela
+// gravava, a recarga falhava só num log e o próximo `npm start` ABORTAVA,
+// exigindo editar o JSON na mão — o oposto do que a ferramenta existe para
+// fazer.
+
+test('cron que passa em validate() mas o node-cron recusa registrar é rejeitado', () => {
+  const path = writeSchedules({
+    defaultGroups: ['1@g.us'],
+    schedules: [{ name: 'nunca-dispara', cron: '0 0 31W 2 *', message: 'oi' }],
+  });
+
+  assert.throws(
+    () => loadSchedules(path),
+    /Agendamento "nunca-dispara".*cron inválida.*não é registrável/s,
+    'o erro precisa nomear o agendamento e dizer por que a expressão não serve'
+  );
+});
+
+test('checkCron não deixa task pendurada no registro do node-cron', () => {
+  const antes = getTasks().size;
+
+  assert.equal(checkCron('0 9 * * 1').valid, true);
+  assert.equal(checkCron('0 0 31W 2 *').valid, false);
+  assert.equal(checkCron('não-é-cron').valid, false);
+
+  assert.equal(getTasks().size, antes, 'validar não pode registrar task nenhuma');
 });

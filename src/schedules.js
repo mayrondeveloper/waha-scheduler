@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
-import { validate as isValidCron } from 'node-cron';
+import { schedule as scheduleCron, validate as isValidCron } from 'node-cron';
 import { config } from './config.js';
 import { normalizeGroups } from './broadcast.js';
 
@@ -22,6 +22,35 @@ function stableId(prefix, seed) {
 function labelFor(raw, index) {
   if (raw && typeof raw.name === 'string' && raw.name.trim()) return raw.name.trim();
   return index != null ? `#${index + 1}` : '(sem nome)';
+}
+
+/**
+ * Confere se a expressão cron é registrável de fato, e não apenas
+ * bem-formada: validate() aceita expressões que schedule() recusa — por
+ * exemplo "0 0 31W 2 *", que passa na checagem estática mas nunca casa com
+ * data nenhuma. Sem isto, a tela grava um cron que a recarga do scheduler
+ * ignora em silêncio e que faz o PRÓXIMO boot abortar, deixando o usuário
+ * com um arquivo para consertar na mão — exatamente o que a tela existe
+ * para evitar.
+ * @param {string} expr Expressão cron.
+ * @param {string} [timezone] Fuso com que a expressão será registrada
+ *   (default: config.timezone) — é o mesmo que o scheduler usa.
+ * @returns {{valid: boolean, reason?: string}} "reason" só vem quando a
+ *   expressão é bem-formada mas o node-cron recusa registrá-la.
+ */
+export function checkCron(expr, timezone = config.timezone) {
+  if (typeof expr !== 'string' || !isValidCron(expr)) return { valid: false };
+
+  // Cria e destrói na hora, como a rota de preview: uma validação não pode
+  // deixar task pendurada no registro global do node-cron.
+  let task;
+  try {
+    task = scheduleCron(expr, () => {}, { timezone });
+  } catch (err) {
+    return { valid: false, reason: err.message };
+  }
+  task.destroy();
+  return { valid: true };
 }
 
 /**
@@ -75,8 +104,12 @@ export function validateSchedule(raw, context = {}, index) {
   if (typeof raw.cron !== 'string' || !raw.cron.trim()) {
     fail(`Agendamento "${label}": campo "cron" é obrigatório e deve ser um texto.`);
   }
-  if (!isValidCron(raw.cron)) {
-    fail(`Agendamento "${label}": expressão cron inválida "${raw.cron}".`);
+  const cron = checkCron(raw.cron);
+  if (!cron.valid) {
+    fail(
+      `Agendamento "${label}": expressão cron inválida "${raw.cron}"` +
+        `${cron.reason ? ` — não é registrável: ${cron.reason}` : ''}.`
+    );
   }
   if (typeof raw.messageId !== 'string' || !raw.messageId.trim()) {
     fail(`Agendamento "${label}": campo "messageId" é obrigatório.`);
