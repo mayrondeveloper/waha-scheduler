@@ -1,13 +1,19 @@
-// Servidor HTTP local da tela de agendamentos. Escuta apenas em 127.0.0.1.
+// Servidor HTTP local da tela de agendamentos.
+// O host é sempre 127.0.0.1, sem escotilha por env: é essa inalcançabilidade
+// de fora que dispensa autenticação própria nesta tela — não removê-la sem
+// implementar autenticação antes.
 
 import { createServer as createHttpServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { StringDecoder } from 'node:string_decoder';
 import { config } from '../config.js';
 import { info, error } from '../logger.js';
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
+const MAX_BODY_BYTES = 1_000_000;
+const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
 // Lista fixa: o caminho servido nunca é montado a partir da URL.
 const STATIC_FILES = {
@@ -22,23 +28,85 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// Responde e, só depois de os bytes saírem para o socket, encerra a conexão —
+// usado quando o corpo estourou o limite, para não deixar o cliente continuar
+// mandando dados.
+function sendJsonAndClose(req, res, status, body) {
+  res.writeHead(status, { Connection: 'close', 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
+  // Espera a resposta ser entregue e o restante do corpo em trânsito ser
+  // drenado antes de derrubar o socket — encerrar cedo demais, com bytes
+  // ainda não lidos no buffer do SO, gera RST e descarta a resposta.
+  res.once('finish', () => setTimeout(() => req.destroy(), 50));
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
+    const decoder = new StringDecoder('utf8');
     let raw = '';
+    let totalBytes = 0;
+    let settled = false;
+
     req.on('data', (chunk) => {
-      raw += chunk;
-      if (raw.length > 1_000_000) reject(new Error('Corpo da requisição grande demais.'));
+      if (settled) return;
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        settled = true;
+        const err = new Error('Corpo da requisição grande demais.');
+        err.status = 413;
+        reject(err);
+        return;
+      }
+      raw += decoder.write(chunk);
     });
     req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      raw += decoder.end();
       if (!raw.trim()) return resolve({});
       try {
         resolve(JSON.parse(raw));
       } catch {
-        reject(new Error('JSON inválido no corpo da requisição.'));
+        const err = new Error('JSON inválido no corpo da requisição.');
+        err.status = 400;
+        reject(err);
       }
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
   });
+}
+
+function hasJsonContentType(req) {
+  const contentType = req.headers['content-type'];
+  if (!contentType) return false;
+  return /^application\/json\s*(;.*)?$/i.test(contentType.trim());
+}
+
+function isAllowedHost(hostHeader, port) {
+  if (!hostHeader) return false;
+  return (
+    hostHeader === `127.0.0.1:${port}` ||
+    hostHeader === `localhost:${port}` ||
+    hostHeader === `[::1]:${port}`
+  );
+}
+
+function isSameOriginHeader(originHeader, port) {
+  return originHeader === `http://127.0.0.1:${port}` || originHeader === `http://localhost:${port}`;
+}
+
+function isInvalidParam(value) {
+  return (
+    value === '' ||
+    value.includes('/') ||
+    value.includes('\\') ||
+    value.includes('..') ||
+    value.includes('\0')
+  );
 }
 
 /**
@@ -49,28 +117,62 @@ function readBody(req) {
 export function createServer(options = {}) {
   const { schedulesPath = config.schedulesPath, cfg = config, routes = {} } = options;
 
-  return createHttpServer(async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
+  const server = createHttpServer(async (req, res) => {
+    let url;
+    try {
+      url = new URL(req.url, 'http://localhost');
+    } catch {
+      return sendJson(res, 400, { error: 'URL malformada.' });
+    }
     const path = url.pathname;
+
+    // Defesas contra CSRF/DNS rebinding: nada disso substitui o bind em
+    // 127.0.0.1, mas o bind sozinho não protege do navegador do usuário.
+    const port = server.address()?.port ?? cfg.uiPort;
+
+    if (!isAllowedHost(req.headers.host, port)) {
+      return sendJson(res, 403, { error: 'Cabeçalho Host não permitido.' });
+    }
+
+    const origin = req.headers.origin;
+    if (origin && !isSameOriginHeader(origin, port)) {
+      return sendJson(res, 403, { error: 'Origem não permitida.' });
+    }
 
     const asset = STATIC_FILES[path];
     if (asset && req.method === 'GET') {
       const [file, type] = asset;
+      let content;
       try {
-        res.writeHead(200, { 'Content-Type': type });
-        return res.end(readFileSync(join(PUBLIC_DIR, file)));
+        content = readFileSync(join(PUBLIC_DIR, file));
       } catch (err) {
         error(`Não foi possível ler o estático ${file}: ${err.message}`);
         return sendJson(res, 500, { error: 'Erro ao carregar a página.' });
       }
+      res.writeHead(200, { 'Content-Type': type });
+      return res.end(content);
+    }
+
+    if (MUTATING_METHODS.includes(req.method) && !hasJsonContentType(req)) {
+      return sendJson(res, 415, { error: 'Content-Type deve ser application/json.' });
     }
 
     // Rota exata devolve a função crua; a dinâmica devolve { fn, params }.
     // Normaliza as duas para a mesma forma antes de chamar.
-    const exact = routes[`${req.method} ${path}`];
-    const handler = exact ? { fn: exact, params: {} } : matchDynamic(routes, req.method, path);
+    let handler;
+    try {
+      const exactFn = matchExact(routes, req.method, path);
+      handler = exactFn ? { fn: exactFn, params: {} } : matchDynamic(routes, req.method, path);
+    } catch (err) {
+      return sendJson(res, err.status ?? 400, { error: err.message });
+    }
+
     if (!handler) {
       return sendJson(res, 404, { error: `Rota não encontrada: ${req.method} ${path}` });
+    }
+
+    if (Object.values(handler.params).some(isInvalidParam)) {
+      return sendJson(res, 400, { error: 'Parâmetro de rota inválido.' });
     }
 
     try {
@@ -79,29 +181,55 @@ export function createServer(options = {}) {
       return sendJson(res, result.status ?? 200, result.body);
     } catch (err) {
       error(err.message);
-      return sendJson(res, err.status ?? 500, { error: err.message });
+      const status = err.status ?? 500;
+      if (status === 413) {
+        return sendJsonAndClose(req, res, status, { error: err.message });
+      }
+      const message = status >= 500 ? 'Erro interno do servidor.' : err.message;
+      return sendJson(res, status, { error: message });
     }
   });
+
+  return server;
+}
+
+// Casa a rota exata; ignora chaves com ':' (são padrões da busca dinâmica —
+// se o caminho pedido for literalmente "/api/messages/:id", não pode achar
+// essa entrada por coincidência de string).
+function matchExact(routes, method, path) {
+  const key = `${method} ${path}`;
+  if (key.includes(':')) return null;
+  return routes[key] ?? null;
 }
 
 // Casa rotas com um parâmetro, ex.: "DELETE /api/messages/:id".
 function matchDynamic(routes, method, path) {
+  const pathParts = path.split('/');
+
   for (const [key, fn] of Object.entries(routes)) {
     const [routeMethod, pattern] = key.split(' ');
     if (routeMethod !== method || !pattern.includes(':')) continue;
 
     const patternParts = pattern.split('/');
-    const pathParts = path.split('/');
     if (patternParts.length !== pathParts.length) continue;
 
     const params = {};
-    const casou = patternParts.every((part, i) => {
+    let casou = true;
+    for (let i = 0; i < patternParts.length; i += 1) {
+      const part = patternParts[i];
       if (part.startsWith(':')) {
-        params[part.slice(1)] = decodeURIComponent(pathParts[i]);
-        return true;
+        try {
+          params[part.slice(1)] = decodeURIComponent(pathParts[i]);
+        } catch {
+          const err = new Error('URL malformada.');
+          err.status = 400;
+          throw err;
+        }
+      } else if (part !== pathParts[i]) {
+        casou = false;
+        break;
       }
-      return part === pathParts[i];
-    });
+    }
 
     if (casou) return { fn, params };
   }
@@ -119,14 +247,15 @@ export function startUi(options = {}) {
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    // Sempre 127.0.0.1: a tela dispara envios reais e não pode ser alcançável de fora.
-    server.listen(cfg.uiPort, cfg.uiHost ?? '127.0.0.1', () => {
+    // Host sempre fixo em 127.0.0.1, nunca vindo de env ou cfg: é essa
+    // inalcançabilidade de fora que dispensa autenticação própria na tela.
+    server.listen(cfg.uiPort, '127.0.0.1', () => {
       resolve({ server, port: server.address().port });
     });
   });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { port } = await startUi();
-  info(`Tela de agendamentos em http://127.0.0.1:${port}`);
+  const { server, port } = await startUi();
+  info(`Tela de agendamentos em http://${server.address().address}:${port}`);
 }

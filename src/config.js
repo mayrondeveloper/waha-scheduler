@@ -12,7 +12,6 @@ const DEFAULTS = {
   DELAY_MAX_MS: '8000',
   TIMEZONE: 'America/Sao_Paulo',
   UI_PORT: '3000',
-  UI_HOST: '127.0.0.1',
 };
 
 function readNumber(env, key) {
@@ -29,7 +28,7 @@ function readNumber(env, key) {
  * @param {Record<string, string|undefined>} [env] Fonte das variáveis (default: process.env).
  * @returns {{wahaUrl: string, session: string, apiKey: string, schedulesPath: string,
  *            logPath: string, delayMinMs: number, delayMaxMs: number, timezone: string,
- *            uiPort: number, uiHost: string}}
+ *            uiPort: number}}
  */
 export function loadConfig(env = process.env) {
   const delayMinMs = readNumber(env, 'DELAY_MIN_MS');
@@ -51,7 +50,6 @@ export function loadConfig(env = process.env) {
     delayMaxMs,
     timezone: env.TIMEZONE ?? DEFAULTS.TIMEZONE,
     uiPort: readNumber(env, 'UI_PORT'),
-    uiHost: env.UI_HOST ?? DEFAULTS.UI_HOST,
   });
 }
 
