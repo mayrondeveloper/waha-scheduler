@@ -33,6 +33,7 @@ Todas as opções vêm de variáveis de ambiente (ver `.env.example`):
 | `DELAY_MIN_MS` | `3000` | Intervalo mínimo entre envios |
 | `DELAY_MAX_MS` | `8000` | Intervalo máximo entre envios |
 | `TIMEZONE` | `America/Sao_Paulo` | Fuso usado pelos agendamentos |
+| `UI_PORT` | `3010` | Porta da tela de agendamentos (sempre em `127.0.0.1`) |
 
 O intervalo aleatório entre `DELAY_MIN_MS` e `DELAY_MAX_MS` é aplicado entre um
 grupo e o seguinte, para evitar bloqueio por flood.
@@ -73,7 +74,7 @@ nos horários definidos. `Ctrl+C` encerra os agendamentos com segurança.
 npm run ui
 ```
 
-Abre em `http://127.0.0.1:3000`. Permite criar, editar, ligar/desligar e
+Abre em `http://127.0.0.1:3010`. Permite criar, editar, ligar/desligar e
 excluir agendamentos e mensagens, escolher grupos por nome, disparar um envio
 na hora e consultar o histórico.
 
@@ -85,13 +86,18 @@ própria numa tela que dispara mensagens de WhatsApp. Para acessar de outra
 máquina, use um túnel SSH:
 
 ```bash
-ssh -L 3000:localhost:3000 usuario@servidor
+ssh -L 3010:localhost:3010 usuario@servidor
 ```
 
 A porta local do túnel precisa casar com a porta em que a tela está
-escutando (`UI_PORT`, default `3000`): a tela valida o cabeçalho `Host` da
-requisição, então um túnel com portas diferentes (`ssh -L 8080:localhost:3000
+escutando (`UI_PORT`, default `3010`): a tela valida o cabeçalho `Host` da
+requisição, então um túnel com portas diferentes (`ssh -L 8080:localhost:3010
 ...`, por exemplo) resulta em `403 Cabeçalho Host não permitido`.
+
+O default é `3010`, e não `3000`, porque `3000` é a porta default do próprio
+WAHA: quem roda o WAHA na mesma máquina bateria em "porta já em uso" ao subir
+a tela. Se a porta escolhida estiver ocupada, a tela diz isso em português e
+encerra — mude `UI_PORT` no `.env` ou libere a porta.
 
 Além do bind em localhost, a tela tem outras defesas que valem conhecer:
 

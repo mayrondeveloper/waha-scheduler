@@ -11,7 +11,7 @@ const DEFAULTS = {
   DELAY_MIN_MS: '3000',
   DELAY_MAX_MS: '8000',
   TIMEZONE: 'America/Sao_Paulo',
-  UI_PORT: '3000',
+  UI_PORT: '3010',
 };
 
 function readNumber(env, key) {

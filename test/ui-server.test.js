@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { request as httpRequest } from 'node:http';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { startUi } from '../src/ui/server.js';
 import { loadConfig } from '../src/config.js';
 
@@ -339,4 +341,34 @@ test('corpo UTF-8 partido entre dois chunks TCP chega íntegro', async (t) => {
   });
 
   assert.equal(received.text, text);
+});
+
+// O entrypoint (`npm run ui`) morria com stack trace cru em inglês quando a
+// porta estava ocupada — o caso mais provável, já que o WAHA local escuta em
+// 3000. src/index.js já trata isso em português; a tela também precisa.
+
+const UI_ENTRYPOINT = fileURLToPath(new URL('../src/ui/server.js', import.meta.url));
+
+function runEntrypoint(env) {
+  return new Promise((resolve) => {
+    execFile('node', [UI_ENTRYPOINT], { env: { ...process.env, ...env } }, (err, stdout, stderr) => {
+      resolve({ code: err?.code ?? 0, stdout, stderr });
+    });
+  });
+}
+
+test('entrypoint com a porta ocupada explica o problema em português e sai com erro', async (t) => {
+  // Ocupa uma porta e manda a tela subir exatamente nela.
+  const blocker = createHttpServer(() => {});
+  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+  const porta = blocker.address().port;
+  t.after(() => blocker.close());
+
+  const { code, stderr } = await runEntrypoint({ UI_PORT: String(porta) });
+
+  assert.equal(code, 1, 'a tela tem que sair com código de erro');
+  assert.match(stderr, new RegExp(`porta ${porta} já está em uso`), 'a mensagem tem que dizer qual porta');
+  assert.match(stderr, /UI_PORT/, 'e o que fazer a respeito');
+  assert.ok(!/at .*server\.js:\d+/.test(stderr), `não pode sair stack trace cru: ${stderr}`);
+  assert.ok(!/EADDRINUSE/.test(stderr), `não pode sair o erro cru em inglês: ${stderr}`);
 });

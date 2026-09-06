@@ -309,7 +309,26 @@ export function startUi(options = {}) {
   });
 }
 
+// Executado apenas quando este arquivo é o entrypoint. O erro mais provável
+// aqui é a porta ocupada — sem tratamento, o usuário levava um stack trace
+// cru em inglês na cara, enquanto src/index.js já explica o problema em
+// português. Mesma postura nos dois processos.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { server, port } = await startUi();
-  info(`Tela de agendamentos em http://${server.address().address}:${port}`);
+  try {
+    const { server, port } = await startUi();
+    info(`Tela de agendamentos em http://${server.address().address}:${port}`);
+  } catch (err) {
+    if (err?.code === 'EADDRINUSE') {
+      error(
+        `A porta ${config.uiPort} já está em uso: outra tela rodando, ou outro serviço ocupando ` +
+          'a porta (o WAHA, por exemplo, escuta em 3000 por padrão).'
+      );
+      error('Encerre quem está usando a porta ou defina outra em UI_PORT no .env.');
+    } else if (err?.code === 'EACCES') {
+      error(`Sem permissão para escutar na porta ${config.uiPort}. Use uma porta acima de 1024 em UI_PORT.`);
+    } else {
+      error(`Não foi possível iniciar a tela de agendamentos: ${describeError(err)}`);
+    }
+    process.exit(1);
+  }
 }
