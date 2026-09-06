@@ -1,7 +1,7 @@
 // Leitura e validação do arquivo de agendamentos (schedules.json).
 
 import { readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { validate as isValidCron } from 'node-cron';
 import { config } from './config.js';
 import { normalizeGroups } from './broadcast.js';
@@ -15,15 +15,43 @@ function newId(prefix) {
 }
 
 /**
+ * Gera um id determinístico a partir de uma semente estável (o nome do
+ * agendamento). Usado na conversão de arquivos v1 para v2, para que duas
+ * leituras do mesmo arquivo produzam sempre os mesmos ids — necessário para
+ * que a API HTTP (tasks seguintes) possa fazer GET/PUT por id de forma
+ * estável.
+ * @param {string} prefix Prefixo do id ("msg" ou "sch").
+ * @param {string} seed Texto usado como semente do hash (nome do agendamento).
+ * @returns {string}
+ */
+function stableId(prefix, seed) {
+  const hash = createHash('sha1').update(seed).digest('hex').slice(0, 8);
+  return `${prefix}-${hash}`;
+}
+
+/**
+ * Rótulo usado em mensagens de erro: o nome, quando válido, senão a posição
+ * ("#1", "#2", ...) quando o índice é conhecido, senão "(sem nome)".
+ * @param {Record<string, unknown>} raw
+ * @param {number} [index]
+ * @returns {string}
+ */
+function labelFor(raw, index) {
+  if (raw && typeof raw.name === 'string' && raw.name.trim()) return raw.name.trim();
+  return index != null ? `#${index + 1}` : '(sem nome)';
+}
+
+/**
  * Valida e normaliza uma mensagem da biblioteca.
  * @param {Record<string, unknown>} raw Mensagem crua.
+ * @param {number} [index] Posição no array "messages" (rotula erros sem nome como #1, #2, ...).
  * @returns {{id: string, name: string, text: string}}
  */
-export function validateMessage(raw) {
+export function validateMessage(raw, index) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     fail('Mensagem: cada item de "messages" deve ser um objeto.');
   }
-  const label = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : '(sem nome)';
+  const label = labelFor(raw, index);
 
   if (typeof raw.name !== 'string' || !raw.name.trim()) {
     fail(`Mensagem ${label}: campo "name" é obrigatório e deve ser um texto.`);
@@ -47,15 +75,16 @@ export function validateMessage(raw) {
  * @param {Record<string, unknown>} raw Agendamento cru.
  * @param {{defaultGroups?: string[], messageIds?: Set<string>}} [context]
  *   messageIds: ids válidos da biblioteca; quando informado, "messageId" é conferido.
+ * @param {number} [index] Posição no array "schedules" (rotula erros sem nome como #1, #2, ...).
  * @returns {{id: string, name: string, cron: string, messageId: string, groups: string[], enabled: boolean}}
  */
-export function validateSchedule(raw, context = {}) {
+export function validateSchedule(raw, context = {}, index) {
   const { defaultGroups = [], messageIds = null } = context;
 
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     fail('Agendamento: cada item de "schedules" deve ser um objeto.');
   }
-  const label = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : '(sem nome)';
+  const label = labelFor(raw, index);
 
   if (typeof raw.name !== 'string' || !raw.name.trim()) {
     fail(`Agendamento ${label}: campo "name" é obrigatório e deve ser um texto.`);
@@ -77,6 +106,9 @@ export function validateSchedule(raw, context = {}) {
   }
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
     fail(`Agendamento "${label}": campo "enabled" deve ser true ou false.`);
+  }
+  if (raw.id !== undefined && (typeof raw.id !== 'string' || !raw.id.trim())) {
+    fail(`Agendamento "${label}": campo "id" deve ser um texto.`);
   }
 
   const groups = normalizeGroups(raw.groups?.length ? raw.groups : defaultGroups);
@@ -118,19 +150,34 @@ export function normalizeStore(parsed) {
   const messages = (parsed.messages ?? []).map(validateMessage);
 
   // v1: agendamento com "message" textual e sem "messageId" vira mensagem sintética.
-  const rawSchedules = (parsed.schedules ?? []).map((raw) => {
+  // Os campos são validados aqui como campos de AGENDAMENTO (não de mensagem: o
+  // usuário v1 escreveu "message", não "text"), para que o erro fale do que o
+  // usuário de fato escreveu no arquivo. O id de ambos (agendamento e mensagem
+  // sintética) é derivado de forma determinística do nome do agendamento — que
+  // já é único por validação — em vez de aleatório, para que duas leituras do
+  // mesmo arquivo v1 produzam sempre os mesmos ids.
+  const rawSchedules = (parsed.schedules ?? []).map((raw, index) => {
     if (raw && typeof raw === 'object' && !raw.messageId && typeof raw.message === 'string') {
-      const created = validateMessage({ name: raw.name ?? 'Mensagem', text: raw.message });
+      const label = labelFor(raw, index);
+      if (typeof raw.name !== 'string' || !raw.name.trim()) {
+        fail(`Agendamento ${label}: campo "name" é obrigatório e deve ser um texto.`);
+      }
+      if (!raw.message.trim()) {
+        fail(`Agendamento "${label}": campo "message" é obrigatório e deve ser um texto.`);
+      }
+
+      const name = raw.name.trim();
+      const created = validateMessage({ id: stableId('msg', name), name, text: raw.message });
       messages.push(created);
       const { message, ...rest } = raw;
-      return { ...rest, messageId: created.id };
+      return { ...rest, id: rest.id ?? stableId('sch', name), messageId: created.id };
     }
     return raw;
   });
 
   const messageIds = new Set(messages.map((m) => m.id));
-  const schedules = rawSchedules.map((raw) =>
-    validateSchedule(raw, { defaultGroups, messageIds })
+  const schedules = rawSchedules.map((raw, index) =>
+    validateSchedule(raw, { defaultGroups, messageIds }, index)
   );
 
   const names = new Set();
@@ -139,6 +186,14 @@ export function normalizeStore(parsed) {
       fail(`Agendamento "${schedule.name}": nome duplicado.`);
     }
     names.add(schedule.name);
+  }
+
+  const seenMessageIds = new Set();
+  for (const msg of messages) {
+    if (seenMessageIds.has(msg.id)) {
+      fail(`Mensagem "${msg.id}": id duplicado.`);
+    }
+    seenMessageIds.add(msg.id);
   }
 
   return { version: 2, defaultGroups, messages, schedules };

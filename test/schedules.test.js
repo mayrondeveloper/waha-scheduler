@@ -147,3 +147,111 @@ test('loadSchedules entrega o texto da mensagem resolvido em cada agendamento', 
   assert.equal(messages.length, 1);
   assert.equal(schedules[0].message, 'Olá!');
 });
+
+// --- Correções de achados da revisão de qualidade da Task 2 ---
+
+test('normalizeStore preserva o id do agendamento vindo de arquivo v2', () => {
+  const v2 = {
+    version: 2,
+    defaultGroups: ['1@g.us'],
+    messages: [{ id: 'msg-a', name: 'Oi', text: 'Olá!' }],
+    schedules: [{ id: 'sch-a', name: 'novo', cron: '0 9 * * 1', messageId: 'msg-a' }],
+  };
+  const store = normalizeStore(v2);
+
+  assert.equal(store.schedules[0].id, 'sch-a');
+});
+
+test('id de agendamento com tipo errado gera Error em português, não TypeError', () => {
+  try {
+    validateSchedule(
+      { id: 123, name: 'x', cron: '0 9 * * 1', messageId: 'm', groups: ['1@g.us'] },
+      { messageIds: new Set(['m']) }
+    );
+    assert.fail('deveria ter lançado erro');
+  } catch (err) {
+    assert.equal(err instanceof TypeError, false);
+    assert.match(err.message, /campo "id" deve ser um texto/);
+  }
+});
+
+test('ids de mensagem duplicados são recusados', () => {
+  assert.throws(
+    () =>
+      normalizeStore({
+        messages: [
+          { id: 'msg-dup', name: 'a', text: 'texto a' },
+          { id: 'msg-dup', name: 'b', text: 'texto b' },
+        ],
+        schedules: [],
+      }),
+    /"msg-dup".*duplicado/s
+  );
+});
+
+test('agendamento v1 com "message" vazia é recusado como erro de agendamento, não de mensagem', () => {
+  const path = writeSchedules({
+    schedules: [{ name: 'sch1', cron: '0 9 * * 1', message: '', groups: ['1@g.us'] }],
+  });
+  assert.throws(() => loadSchedules(path), /Agendamento "sch1": campo "message" é obrigatório/);
+});
+
+test('agendamento v1 com "name" inválido é recusado como erro de agendamento, não de mensagem', () => {
+  const path = writeSchedules({
+    schedules: [{ name: 42, cron: '0 9 * * 1', message: 'oi', groups: ['1@g.us'] }],
+  });
+  assert.throws(() => loadSchedules(path), /Agendamento #1: campo "name" é obrigatório/);
+});
+
+test('loadSchedules de arquivo v1 devolve messages com a mensagem sintética', () => {
+  const path = writeSchedules({
+    defaultGroups: ['1@g.us'],
+    schedules: [{ name: 'legado', cron: '0 9 * * 1', message: 'texto legado' }],
+  });
+
+  const { messages, schedules } = loadSchedules(path);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, 'texto legado');
+  assert.equal(schedules[0].messageId, messages[0].id);
+});
+
+test('duas leituras do mesmo arquivo v1 devolvem os mesmos ids', () => {
+  const path = writeSchedules({
+    defaultGroups: ['1@g.us'],
+    schedules: [{ name: 'estavel', cron: '0 9 * * 1', message: 'oi' }],
+  });
+
+  const first = loadSchedules(path);
+  const second = loadSchedules(path);
+  assert.equal(first.schedules[0].id, second.schedules[0].id);
+  assert.equal(first.messages[0].id, second.messages[0].id);
+});
+
+test('dois agendamentos sem nome geram mensagens de erro distintas', () => {
+  let firstError;
+  let secondError;
+
+  try {
+    validateSchedule({ cron: '0 9 * * 1', messageId: 'm' }, { messageIds: new Set(['m']) }, 0);
+  } catch (err) {
+    firstError = err.message;
+  }
+  try {
+    validateSchedule({ cron: '0 9 * * 1', messageId: 'm' }, { messageIds: new Set(['m']) }, 1);
+  } catch (err) {
+    secondError = err.message;
+  }
+
+  assert.match(firstError, /#1/);
+  assert.match(secondError, /#2/);
+  assert.notEqual(firstError, secondError);
+});
+
+test('groups: [] explícito herda defaultGroups', () => {
+  const path = writeSchedules({
+    defaultGroups: ['1@g.us', '2@g.us'],
+    schedules: [{ name: 'grupos-vazios', cron: '0 9 * * 1', message: 'oi', groups: [] }],
+  });
+
+  assert.deepEqual(loadSchedules(path).schedules[0].groups, ['1@g.us', '2@g.us']);
+});
