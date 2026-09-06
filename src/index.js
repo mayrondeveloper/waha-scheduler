@@ -22,8 +22,12 @@ export function startScheduler(options = {}) {
   let tasks = [];
 
   function register(schedules) {
-    for (const { task } of tasks) task.stop();
-    tasks = [];
+    // Monta a nova geração de tasks ANTES de tocar na anterior: se algo
+    // falhar no meio do laço, a config antiga continua intacta e ativa —
+    // é o que permite reload() preservá-la em vez de ficar com um estado
+    // meio-aplicado (metade da geração antiga descartada, metade da nova
+    // no ar).
+    const newTasks = [];
 
     for (const item of schedules) {
       if (!item.enabled) {
@@ -31,26 +35,43 @@ export function startScheduler(options = {}) {
         continue;
       }
 
-      const task = scheduleCron(
-        item.cron,
-        async () => {
-          info(`Disparando agendamento "${item.name}" para ${item.groups.length} grupo(s).`);
-          try {
-            const { sent, failed } = await broadcast(item.message, item.groups, {
-              cfg,
-              label: item.name,
-            });
-            success(`Agendamento "${item.name}": ${sent} enviada(s), ${failed} falha(s).`);
-          } catch (err) {
-            error(`Agendamento "${item.name}" falhou: ${err.message}`);
-          }
-        },
-        { timezone: cfg.timezone }
-      );
+      let task;
+      try {
+        task = scheduleCron(
+          item.cron,
+          async () => {
+            info(`Disparando agendamento "${item.name}" para ${item.groups.length} grupo(s).`);
+            try {
+              const { sent, failed } = await broadcast(item.message, item.groups, {
+                cfg,
+                label: item.name,
+              });
+              success(`Agendamento "${item.name}": ${sent} enviada(s), ${failed} falha(s).`);
+            } catch (err) {
+              error(`Agendamento "${item.name}" falhou: ${err.message}`);
+            }
+          },
+          { timezone: cfg.timezone }
+        );
+      } catch (err) {
+        // Descarta o que já foi criado nesta tentativa (não é nem a
+        // geração antiga, nem uma nova geração válida) e propaga com o
+        // nome do agendamento problemático.
+        for (const { task: created } of newTasks) created.destroy();
+        throw new Error(`Agendamento "${item.name}": falha ao registrar - ${err.message}`);
+      }
 
-      tasks.push({ name: item.name, task });
+      newTasks.push({ name: item.name, task });
       info(`Agendamento "${item.name}" registrado: "${item.cron}" (${item.groups.length} grupo(s)).`);
     }
+
+    // Só agora, com a nova geração inteira criada com sucesso, descarta a
+    // anterior. task.stop() apenas pausa a execução — o node-cron 4.x
+    // mantém a task no registro global (getTasks()) até destroy() ser
+    // chamado. Sem isso, cada recarga abandonaria a geração anterior para
+    // sempre (closure com mensagem, groups e cfg retidos indefinidamente).
+    for (const { task } of tasks) task.destroy();
+    tasks = newTasks;
   }
 
   // Primeira carga: deixa o erro subir, para o boot poder abortar.
@@ -58,19 +79,18 @@ export function startScheduler(options = {}) {
 
   return {
     reload() {
-      let loaded;
       try {
-        loaded = loadSchedules(schedulesPath);
+        const loaded = loadSchedules(schedulesPath);
+        register(loaded.schedules);
       } catch (err) {
         error(`Recarga ignorada, mantendo a configuração anterior: ${err.message}`);
         return false;
       }
-      register(loaded.schedules);
       success(`Configuração recarregada: ${tasks.length} agendamento(s) ativo(s).`);
       return true;
     },
     stop() {
-      for (const { task } of tasks) task.stop();
+      for (const { task } of tasks) task.destroy();
       tasks = [];
     },
     get activeNames() {
@@ -90,12 +110,25 @@ export function startScheduler(options = {}) {
 export function watchFile(filePath, onChange) {
   const target = resolve(filePath);
   const name = basename(target);
+  const dir = dirname(target);
   let timer = null;
 
-  const watcher = watch(dirname(target), (_event, changed) => {
+  const watcher = watch(dir, (_event, changed) => {
     if (changed && changed !== name) return;
     clearTimeout(timer);
     timer = setTimeout(onChange, RELOAD_DEBOUNCE_MS);
+  });
+
+  // FSWatcher é um EventEmitter: um evento 'error' sem listener lança e
+  // derruba o processo. Acontece de verdade em Linux/Docker (ENOSPC por
+  // limite de inotify, diretório removido ou substituído). O processo
+  // precisa seguir vivo disparando o que já está registrado, mesmo tendo
+  // perdido a capacidade de observar o arquivo.
+  watcher.on('error', (err) => {
+    error(
+      `Erro ao observar ${dir}: ${err.message}. As recargas automáticas de "${target}" pararam — ` +
+        'os agendamentos já registrados continuam disparando normalmente. Reinicie o processo para restaurá-las.'
+    );
   });
 
   return {
