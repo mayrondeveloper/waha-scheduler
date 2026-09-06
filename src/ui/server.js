@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import { info, error } from '../logger.js';
 import { messageRoutes } from './routes/messages.js';
 import { scheduleRoutes } from './routes/schedules.js';
+import { actionRoutes } from './routes/actions.js';
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
 const MAX_BODY_BYTES = 1_000_000;
@@ -159,7 +160,7 @@ export function createServer(options = {}) {
   // As rotas da aplicação vêm primeiro; `extra` (testes, ou futuras Tasks)
   // pode sobrepor por chave — é o que os testes de rota crua do servidor
   // (test/ui-server.test.js) fazem para exercitar o roteador isoladamente.
-  const routes = { ...messageRoutes, ...scheduleRoutes, ...extra };
+  const routes = { ...messageRoutes, ...scheduleRoutes, ...actionRoutes, ...extra };
 
   const server = createHttpServer(async (req, res) => {
     let url;
