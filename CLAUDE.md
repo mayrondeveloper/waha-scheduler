@@ -1,6 +1,12 @@
 # CLAUDE.md — waha-scheduler
 
-Convenções e regras para trabalhar neste projeto. A fonte da verdade funcional é o SPEC.md.
+Convenções e regras para trabalhar neste projeto.
+
+**Sobre a fonte da verdade funcional:** o `SPEC.md` citado abaixo nunca existiu neste
+repositório. O comportamento das fases 1 a 4 está definido pelos asserts de
+`harness/run.js`, que é o contrato de fato. O frontend tem design próprio em
+`docs/superpowers/specs/2026-09-06-frontend-agendamentos-design.md`. Se o SPEC.md
+aparecer, ele volta a ser a autoridade e estas duas fontes devem ser reconciliadas com ele.
 
 ## Regras gerais
 
@@ -20,7 +26,10 @@ Convenções e regras para trabalhar neste projeto. A fonte da verdade funcional
 
 ## Ajustes de testabilidade (complementam o SPEC.md)
 
-- O caminho do schedules.json pode ser sobrescrito pela env `SCHEDULES_PATH` (default: `./schedules.json`). O harness usa isso para injetar arquivos de teste.
+- O caminho do schedules.json pode ser sobrescrito pela env `SCHEDULES_PATH`
+  (default: `./data/schedules.json`). O harness usa isso para injetar arquivos de teste.
+  O arquivo versionado é o `schedules.example.json`, com placeholders; `data/` fica fora
+  do versionamento porque a tela grava ids de grupos reais nele e o repositório é público.
 - O caminho do log pode ser sobrescrito pela env `LOG_PATH` (default: `./logs/sends.jsonl`).
 - `broadcast.js` deve aceitar o client como parâmetro injetável (default: o waha.client real) para permitir mock em teste unitário.
 
@@ -28,8 +37,10 @@ Convenções e regras para trabalhar neste projeto. A fonte da verdade funcional
 
 - Não usar axios, express, TypeScript, ORM ou framework de teste externo.
 - Não implementar retry automático, fila ou webhook (fora de escopo, ver não-objetivos do SPEC).
-- Não commitar .env, logs/ ou node_modules (garanta o .gitignore na Fase 1).
-- Não alterar o SPEC.md nem os arquivos de harness/ para "fazer o teste passar". Se um teste do harness parecer errado, pare e pergunte ao usuário.
+- Não commitar .env, logs/, data/, ./schedules.json ou node_modules (garanta o .gitignore na Fase 1).
+- Não alterar os arquivos de harness/ para "fazer o teste passar" — eles são o contrato.
+  Se um teste do harness parecer errado, pare e pergunte ao usuário. O mesmo vale para o
+  SPEC.md, se ele passar a existir.
 
 ## Fluxo de validação por fase
 
