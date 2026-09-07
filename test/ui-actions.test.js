@@ -270,18 +270,55 @@ test('preview de cron que nunca casa com nenhuma data responde inválido com mot
   assert.equal(getTasks().size, antes, 'nenhuma task pode continuar registrada');
 });
 
+// A rota de preview não fala com o WAHA — só com o node-cron. Este helper sobe
+// a UI num fuso escolhido, sem mock, para o teste comparar fusos entre si.
+async function bootWithTimezone(t, timezone) {
+  const dir = mkdtempSync(join(tmpdir(), 'waha-tz-'));
+  const cfg = {
+    uiPort: 0,
+    wahaUrl: `http://localhost:${PORT}`, session: 'default', apiKey: '',
+    delayMinMs: 0, delayMaxMs: 0, logPath: join(dir, 'sends.jsonl'),
+    timezone,
+  };
+  const { server, port } = await startUi({ schedulesPath: newStore(dir), cfg });
+  t.after(() => server.close());
+
+  return (path) => fetch(`http://127.0.0.1:${port}${path}`);
+}
+
 // O preview usava scheduleCron SEM timezone enquanto o scheduler registra com
 // { timezone: cfg.timezone }: num VPS em UTC com TIMEZONE=America/Sao_Paulo —
 // o caso normal — os "próximos 3 disparos" saíam errados pelo offset inteiro.
+//
+// Este teste compara DOIS fusos de propósito. Afirmar só um fuso não funciona:
+// se ele coincidir com o fuso da máquina que roda a suíte, um preview que
+// ignora cfg.timezone devolve o mesmo resultado e o teste passa por vacuidade
+// — foi exatamente o que aconteceu com a versão anterior deste teste, que
+// afirmava America/Sao_Paulo numa máquina em America/Sao_Paulo.
 test('preview calcula os disparos no fuso configurado, o mesmo que o scheduler usa', async (t) => {
-  const { call } = await boot(t); // cfg.timezone = America/Sao_Paulo
+  const query = '/api/cron/preview?expr=' + encodeURIComponent('0 9 * * 1');
 
-  const emSaoPaulo = await (await call('/api/cron/preview?expr=' + encodeURIComponent('0 9 * * 1'))).json();
-  assert.equal(emSaoPaulo.valid, true);
-  for (const iso of emSaoPaulo.next) {
-    assert.match(iso, /T12:00:00\.000Z$/,
-      '09:00 em America/Sao_Paulo é 12:00Z — se sair 09:00Z, o preview ignorou o fuso');
+  const inTokyo = await (await (await bootWithTimezone(t, 'Asia/Tokyo'))(query)).json();
+  const inSaoPaulo = await (await (await bootWithTimezone(t, 'America/Sao_Paulo'))(query)).json();
+
+  assert.equal(inTokyo.valid, true);
+  assert.equal(inSaoPaulo.valid, true);
+  assert.equal(inTokyo.next.length, 3);
+  assert.equal(inSaoPaulo.next.length, 3);
+
+  // 09:00 em Asia/Tokyo (UTC+9) é 00:00Z; em America/Sao_Paulo (UTC-3) é 12:00Z.
+  for (const iso of inTokyo.next) {
+    assert.match(iso, /T00:00:00\.000Z$/, '09:00 em Asia/Tokyo é 00:00Z');
   }
+  for (const iso of inSaoPaulo.next) {
+    assert.match(iso, /T12:00:00\.000Z$/, '09:00 em America/Sao_Paulo é 12:00Z');
+  }
+
+  // A asserção que dá poder de detecção em QUALQUER máquina: um preview que
+  // ignora cfg.timezone cai no fuso do sistema e devolve resultados IDÊNTICOS
+  // para os dois. Só a comparação entre fusos independe do TZ local.
+  assert.notDeepEqual(inTokyo.next, inSaoPaulo.next,
+    'fusos diferentes têm que produzir horários diferentes — se são iguais, cfg.timezone foi ignorado');
 });
 
 // A task criada pela rota só serve para consultar getNextRuns() — o
