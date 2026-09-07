@@ -112,11 +112,32 @@ test('messageId inexistente responde 400', async (t) => {
   assert.match((await res.json()).error, /não existe/);
 });
 
-test('agendamento sem groups herda defaultGroups', async (t) => {
+test('agendamento sem o campo groups herda defaultGroups', async (t) => {
   const call = await boot(t, newStore());
-  const { groups } = await (await call('/api/schedules', json('POST', { ...novo, groups: [] }))).json();
+  const semGroups = { name: novo.name, cron: novo.cron, messageId: novo.messageId };
+  const { groups } = await (await call('/api/schedules', json('POST', semGroups))).json();
 
   assert.deepEqual(groups, ['111111111111111111@g.us']);
+});
+
+test('groups: [] explícito responde 400 e não grava, em vez de herdar defaultGroups', async (t) => {
+  const call = await boot(t, newStore());
+  const res = await call('/api/schedules', json('POST', { ...novo, groups: [] }));
+
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /lista de grupos vazia/);
+  assert.deepEqual(await (await call('/api/schedules')).json(), [], 'nada pode ser gravado');
+});
+
+test('editar desmarcando todos os grupos responde 400 e preserva os destinos salvos', async (t) => {
+  const call = await boot(t, newStore());
+  const criado = await (await call('/api/schedules', json('POST', novo))).json();
+
+  const res = await call(`/api/schedules/${criado.id}`, json('PUT', { ...novo, groups: [] }));
+  assert.equal(res.status, 400);
+
+  const [depois] = await (await call('/api/schedules')).json();
+  assert.deepEqual(depois.groups, novo.groups, 'os destinos salvos não podem ser trocados');
 });
 
 test('nome duplicado responde 400', async (t) => {

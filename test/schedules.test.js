@@ -248,13 +248,25 @@ test('dois agendamentos sem nome geram mensagens de erro distintas', () => {
   assert.notEqual(firstError, secondError);
 });
 
-test('groups: [] explícito herda defaultGroups', () => {
+// "groups" ausente e "groups: []" NÃO são a mesma coisa: com um seletor de
+// grupos na tela, a lista vazia é uma escolha do usuário, e herdar os defaults
+// nesse caso trocaria os destinatários em silêncio.
+test('groups: [] explícito é recusado, em vez de herdar defaultGroups', () => {
   const path = writeSchedules({
     defaultGroups: ['1@g.us', '2@g.us'],
     schedules: [{ name: 'grupos-vazios', cron: '0 9 * * 1', message: 'oi', groups: [] }],
   });
 
-  assert.deepEqual(loadSchedules(path).schedules[0].groups, ['1@g.us', '2@g.us']);
+  assert.throws(() => loadSchedules(path), /lista de grupos vazia/);
+});
+
+test('groups informado só com entradas em branco é recusado', () => {
+  const path = writeSchedules({
+    defaultGroups: ['1@g.us'],
+    schedules: [{ name: 'grupos-brancos', cron: '0 9 * * 1', message: 'oi', groups: ['', '  '] }],
+  });
+
+  assert.throws(() => loadSchedules(path), /nenhum grupo de destino|lista de grupos vazia/);
 });
 
 // A validação só chamava validate(), a checagem estática do node-cron.

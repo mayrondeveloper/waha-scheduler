@@ -360,11 +360,18 @@ document.addEventListener('submit', (evt) => {
 
   withErrorHandling(async () => {
     if (form.id === 'form-schedule') {
+      const groups = formGroups(form);
+      // A API recusa lista vazia com 400. Barrar aqui evita a ida e volta e
+      // deixa claro que desmarcar tudo não significa "herda os defaults".
+      if (groups.length === 0) {
+        throw new Error('Selecione ao menos um grupo de destino.');
+      }
+
       const payload = {
         name: form.name.value,
         cron: form.cron.value,
         messageId: form.messageId.value,
-        groups: formGroups(form),
+        groups,
       };
       const editingId = state.editing.data.id;
       await api(editingId ? `/schedules/${editingId}` : '/schedules', {

@@ -183,7 +183,9 @@ propague para agendamentos já salvos pela tela.
   processo apontando o agendamento problemático.
 - `messageId` — obrigatório; precisa apontar para um `id` existente em
   `messages`.
-- `groups` — opcional; quando ausente, herda `defaultGroups`.
+- `groups` — opcional; quando **ausente**, herda `defaultGroups`. Informado como
+  **lista vazia** é erro — desmarcar todos os grupos na tela não vira "herda os
+  defaults", e sim uma recusa explícita.
 - `enabled` — opcional (default `true`); agendamentos desabilitados são
   ignorados pelo cron (mas continuam disparáveis na hora, pela tela).
 

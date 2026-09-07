@@ -67,7 +67,10 @@ Regras:
 - `id` — gerado no servidor, imutável, nunca vindo do cliente.
 - `name` — rótulo exibido; único entre agendamentos, para os logs continuarem legíveis.
 - `messageId` — obrigatório e precisa existir em `messages`.
-- `groups` — se ausente ou vazio, herda `defaultGroups`; se ainda ficar vazio, é erro.
+- `groups` — se **ausente**, herda `defaultGroups`. Se **informado como lista
+  vazia**, é erro: com um seletor de grupos na tela, a lista vazia é uma escolha
+  do usuário, e herdar os defaults nesse caso trocaria os destinatários em
+  silêncio. Se após a herança ainda ficar vazio, também é erro.
 - `enabled` — default `true`.
 
 ### Compatibilidade com o formato atual

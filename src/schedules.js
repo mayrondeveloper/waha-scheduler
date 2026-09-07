@@ -127,7 +127,15 @@ export function validateSchedule(raw, context = {}, index) {
     fail(`Agendamento "${label}": campo "id" deve ser um texto.`);
   }
 
-  const groups = normalizeGroups(raw.groups?.length ? raw.groups : defaultGroups);
+  // "groups" ausente herda defaultGroups; "groups" informado como lista vazia é
+  // erro, não herança. Com um seletor de grupos na tela, a lista vazia é uma
+  // escolha do usuário, e herdar os defaults nesse caso trocaria os
+  // destinatários em silêncio.
+  if (raw.groups !== undefined && raw.groups.length === 0) {
+    fail(`Agendamento "${label}": lista de grupos vazia — selecione ao menos um grupo de destino.`);
+  }
+
+  const groups = normalizeGroups(raw.groups ?? defaultGroups);
   if (groups.length === 0) {
     fail(`Agendamento "${label}": nenhum grupo de destino (defina "groups" ou "defaultGroups").`);
   }
