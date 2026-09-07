@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { schedule as scheduleCron, validate as isValidCron } from 'node-cron';
-import { config } from './config.js';
+import { assertTimezone, config } from './config.js';
 import { normalizeGroups } from './broadcast.js';
 
 function fail(message) {
@@ -40,6 +40,12 @@ function labelFor(raw, index) {
  */
 export function checkCron(expr, timezone = config.timezone) {
   if (typeof expr !== 'string' || !isValidCron(expr)) return { valid: false };
+
+  // Um fuso inválido não é defeito da expressão. Sem esta checagem, o erro do
+  // node-cron ("Invalid time zone specified") era capturado abaixo e devolvido
+  // como motivo de "cron inválido", mandando o usuário procurar o problema no
+  // schedules.json em vez de no .env.
+  assertTimezone(timezone);
 
   // Cria e destrói na hora, como a rota de preview: uma validação não pode
   // deixar task pendurada no registro global do node-cron.
@@ -213,11 +219,20 @@ export function normalizeStore(parsed) {
   }
 
   const seenMessageIds = new Set();
+  const seenMessageNames = new Set();
   for (const msg of messages) {
     if (seenMessageIds.has(msg.id)) {
       fail(`Mensagem "${msg.id}": id duplicado.`);
     }
+    // Nome duplicado vira duas opções idênticas no seletor da tela, sem o
+    // usuário ter como distinguir qual texto vai ser enviado. A API já recusa
+    // isso; a leitura precisa recusar também, senão um arquivo editado à mão
+    // contorna a garantia.
+    if (seenMessageNames.has(msg.name)) {
+      fail(`Mensagem "${msg.name}": nome duplicado.`);
+    }
     seenMessageIds.add(msg.id);
+    seenMessageNames.add(msg.name);
   }
 
   return { version: 2, defaultGroups, messages, schedules };

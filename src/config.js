@@ -14,6 +14,34 @@ const DEFAULTS = {
   UI_PORT: '3010',
 };
 
+/**
+ * Confirma que o valor é um fuso IANA reconhecido.
+ * @param {string} timezone Fuso a validar, ex.: "America/Sao_Paulo".
+ */
+export function assertTimezone(timezone) {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+  } catch {
+    throw new Error(
+      `Fuso horário inválido: "${timezone}". Use um identificador IANA como ` +
+        'America/Sao_Paulo (veja TIMEZONE no .env).'
+    );
+  }
+}
+
+function readTimezone(env, key) {
+  // Valor em branco no .env significa "não configurei", não "fuso vazio".
+  const raw = (env[key] ?? '').trim() || DEFAULTS[key];
+  try {
+    assertTimezone(raw);
+  } catch {
+    throw new Error(
+      `Variável ${key} inválida: "${raw}". Use um identificador IANA como America/Sao_Paulo.`
+    );
+  }
+  return raw;
+}
+
 function readNumber(env, key) {
   const raw = env[key] ?? DEFAULTS[key];
   const value = Number(raw);
@@ -48,7 +76,7 @@ export function loadConfig(env = process.env) {
     logPath: env.LOG_PATH ?? DEFAULTS.LOG_PATH,
     delayMinMs,
     delayMaxMs,
-    timezone: env.TIMEZONE ?? DEFAULTS.TIMEZONE,
+    timezone: readTimezone(env, 'TIMEZONE'),
     uiPort: readNumber(env, 'UI_PORT'),
   });
 }

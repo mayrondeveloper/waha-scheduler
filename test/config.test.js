@@ -35,3 +35,17 @@ test('o objeto de configuração é imutável', () => {
     cfg.session = 'outra';
   }, TypeError);
 });
+
+test('rejeita TIMEZONE inválido apontando a variável, não o cron', () => {
+  // O erro tem que nomear TIMEZONE: antes, um fuso inválido só aparecia mais
+  // tarde, disfarçado de "expressão cron inválida", mandando o usuário
+  // procurar o defeito no schedules.json em vez de no .env.
+  assert.throws(() => loadConfig({ TIMEZONE: 'America/SaoPaulo' }), /TIMEZONE inválida/);
+  assert.throws(() => loadConfig({ TIMEZONE: 'nao-existe/Nenhum' }), /TIMEZONE inválida/);
+});
+
+test('aceita fusos válidos e trata valor em branco como ausente', () => {
+  assert.equal(loadConfig({ TIMEZONE: 'Asia/Tokyo' }).timezone, 'Asia/Tokyo');
+  assert.equal(loadConfig({ TIMEZONE: 'UTC' }).timezone, 'UTC');
+  assert.equal(loadConfig({ TIMEZONE: '   ' }).timezone, 'America/Sao_Paulo');
+});
