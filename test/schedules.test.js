@@ -298,3 +298,40 @@ test('checkCron não deixa task pendurada no registro do node-cron', () => {
 
   assert.equal(getTasks().size, antes, 'validar não pode registrar task nenhuma');
 });
+
+test('checkCron com fuso inválido acusa o fuso, não a expressão', () => {
+  // A expressão abaixo é válida. Se o erro falar de cron, o usuário vai
+  // procurar o defeito no lugar errado.
+  assert.throws(() => checkCron('0 9 * * 1', 'America/SaoPaulo'), /fuso|TIMEZONE/i);
+
+  const semFuso = checkCron('0 9 * * 1', 'America/Sao_Paulo');
+  assert.equal(semFuso.valid, true);
+});
+
+test('nome de mensagem duplicado é recusado na leitura, como já é na API', () => {
+  const path = writeSchedules({
+    defaultGroups: ['1@g.us'],
+    messages: [
+      { id: 'msg-a', name: 'Bom dia', text: 'primeiro texto' },
+      { id: 'msg-b', name: 'Bom dia', text: 'segundo texto' },
+    ],
+    schedules: [],
+  });
+
+  // Duas mensagens com o mesmo nome viram duas opções idênticas no seletor da
+  // tela, e o usuário escolhe a errada sem ter como distinguir.
+  assert.throws(() => loadSchedules(path), /Mensagem "Bom dia".*duplicado/s);
+});
+
+test('nomes de mensagem que só diferem por espaço em volta contam como duplicados', () => {
+  const path = writeSchedules({
+    defaultGroups: ['1@g.us'],
+    messages: [
+      { id: 'msg-a', name: 'Aviso', text: 'a' },
+      { id: 'msg-b', name: '  Aviso  ', text: 'b' },
+    ],
+    schedules: [],
+  });
+
+  assert.throws(() => loadSchedules(path), /duplicado/);
+});
