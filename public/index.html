@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>waha-scheduler</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>waha-scheduler</h1>
+      <nav>
+        <button data-tab="schedules" class="active">Agendamentos</button>
+        <button data-tab="messages">Mensagens</button>
+        <button data-tab="history">Histórico</button>
+      </nav>
+    </header>
+
+    <p id="notice" hidden></p>
+
+    <main>
+      <section id="schedules"></section>
+      <section id="messages" hidden></section>
+      <section id="history" hidden></section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
