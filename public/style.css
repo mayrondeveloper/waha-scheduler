@@ -39,7 +39,12 @@ form textarea { min-height: 5rem; }
 fieldset { border: 1px solid var(--borda); border-radius: 4px; }
 fieldset label { display: block; font-weight: 400; margin: 0; }
 
+/* Os dias da semana cabem numa linha; a lista de grupos continua um por linha. */
+fieldset.days { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin-bottom: .75rem; }
+fieldset.days label { align-items: center; display: inline-flex; gap: .3rem; }
+
 .preview { font-size: .85rem; opacity: .8; }
+.note { font-size: .85rem; opacity: .8; }
 .preview.invalid { color: var(--erro); opacity: 1; }
 .error { color: var(--erro); }
 .success { color: var(--ok); }

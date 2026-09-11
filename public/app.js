@@ -77,11 +77,91 @@ function groupName(id) {
   return state.groups.find((g) => g.id === id)?.name ?? id;
 }
 
+// A tela pede dias da semana e horário; o arquivo continua guardando um cron,
+// que é o que o agendador registra. A semana começa na segunda, como no
+// calendário brasileiro, mas o número é o do cron (0 = domingo).
+const WEEKDAYS = [
+  { value: 1, label: 'Seg' },
+  { value: 2, label: 'Ter' },
+  { value: 3, label: 'Qua' },
+  { value: 4, label: 'Qui' },
+  { value: 5, label: 'Sex' },
+  { value: 6, label: 'Sáb' },
+  { value: 0, label: 'Dom' },
+];
+
+const pad = (n) => String(n).padStart(2, '0');
+
+function buildCron(days, time) {
+  const [hour, minute] = time.split(':').map(Number);
+  const weekdays = days.length === WEEKDAYS.length ? '*' : [...days].sort((a, b) => a - b).join(',');
+  return `${minute} ${hour} * * ${weekdays}`;
+}
+
+// Só o cron no formato exato "minuto hora * * dias" vira dias e horário — é o
+// que a tela sabe desenhar. Qualquer outra forma (passo, dia do mês, mês,
+// segundos, nome de dia) devolve null e fica como cron personalizado.
+function parseCron(expr) {
+  const fields = String(expr).trim().split(/\s+/);
+  if (fields.length !== 5) return null;
+
+  const [minute, hour, dayOfMonth, month, weekdays] = fields;
+  if (!/^\d{1,2}$/.test(minute) || Number(minute) > 59) return null;
+  if (!/^\d{1,2}$/.test(hour) || Number(hour) > 23) return null;
+  if (dayOfMonth !== '*' || month !== '*') return null;
+
+  const days = [];
+  if (weekdays === '*') {
+    days.push(...WEEKDAYS.map((d) => d.value));
+  } else {
+    for (const part of weekdays.split(',')) {
+      const range = /^([0-7])(?:-([0-7]))?$/.exec(part);
+      if (!range) return null;
+      const start = Number(range[1]);
+      const end = range[2] === undefined ? start : Number(range[2]);
+      if (end < start) return null;
+      // 7 também é domingo no cron.
+      for (let day = start; day <= end; day++) days.push(day % 7);
+    }
+  }
+
+  return {
+    days: [...new Set(days)].sort((a, b) => a - b),
+    time: `${pad(Number(hour))}:${pad(Number(minute))}`,
+  };
+}
+
+function describeCron(expr) {
+  const parsed = parseCron(expr);
+  if (!parsed) return null;
+
+  const labels = WEEKDAYS.filter((d) => parsed.days.includes(d.value)).map((d) => d.label);
+  const when = labels.length === WEEKDAYS.length ? 'Todo dia'
+    : labels.length === 1 ? labels[0]
+    : `${labels.slice(0, -1).join(', ')} e ${labels.at(-1)}`;
+  return `${when} às ${parsed.time}`;
+}
+
+// Cron que o formulário representa agora: o campo cru, se o agendamento tem
+// um cron personalizado; senão, o montado a partir dos dias e do horário.
+// Devolve '' enquanto faltar dia ou horário — a prévia mostra "—" e o save
+// recusa.
+function formCron(form) {
+  const custom = form.querySelector('input[name="cron"]');
+  if (custom) return custom.value.trim();
+
+  const days = [...form.querySelectorAll('input[name="day"]:checked')].map((input) => Number(input.value));
+  const time = form.querySelector('input[name="time"]')?.value ?? '';
+  return days.length > 0 && time ? buildCron(days, time) : '';
+}
+
 function renderSchedules() {
-  const rows = state.schedules.map((s) => `
+  const rows = state.schedules.map((s) => {
+    const when = describeCron(s.cron);
+    return `
     <tr>
       <td>${escape(s.name)}</td>
-      <td><code>${escape(s.cron)}</code></td>
+      <td>${when ? escape(when) : `<code>${escape(s.cron)}</code>`}</td>
       <td>${escape(state.messages.find((m) => m.id === s.messageId)?.name ?? '—')}</td>
       <td>${s.groups.length}</td>
       <td>
@@ -92,7 +172,8 @@ function renderSchedules() {
         <button data-action="run" data-id="${escape(s.id)}">Disparar agora</button>
         <button data-action="delete-schedule" data-id="${escape(s.id)}">Excluir</button>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   $('#schedules').innerHTML = `
     <button data-action="new-schedule">Novo agendamento</button>
@@ -100,7 +181,7 @@ function renderSchedules() {
     ${state.schedules.length === 0
       ? '<p class="empty">Nenhum agendamento ainda.</p>'
       : `<table>
-           <tr><th>Nome</th><th>Cron</th><th>Mensagem</th><th>Grupos</th><th>Estado</th><th></th></tr>
+           <tr><th>Nome</th><th>Quando</th><th>Mensagem</th><th>Grupos</th><th>Estado</th><th></th></tr>
            ${rows}
          </table>`}`;
 
@@ -143,10 +224,28 @@ function scheduleForm() {
     : `<input type="text" id="groups-text" value="${escape(saved.join(','))}"
               placeholder="ids separados por vírgula" />`;
 
+  // Um cron personalizado (editado à mão no arquivo) aparece cru e é mantido
+  // como está: convertê-lo em dias e horário em silêncio mudaria quando o
+  // agendamento dispara, num save que talvez só quisesse trocar a mensagem.
+  const when = s.cron ? parseCron(s.cron) : { days: [], time: '' };
+  const whenMarkup = when
+    ? `
+      <fieldset class="days"><legend>Dias</legend>
+        ${WEEKDAYS.map((d) => `
+          <label>
+            <input type="checkbox" name="day" value="${escape(d.value)}" ${when.days.includes(d.value) ? 'checked' : ''} />
+            ${escape(d.label)}
+          </label>`).join('')}
+      </fieldset>
+      <label><span>Horário</span><input type="time" name="time" value="${escape(when.time)}" required /></label>`
+    : `
+      <p class="note">Este agendamento usa um cron personalizado, que não cabe em dias e horário. Ele é mantido como está.</p>
+      <label><span>Cron</span><input type="text" name="cron" value="${escape(s.cron)}" required /></label>`;
+
   return `
     <form id="form-schedule">
       <label><span>Nome</span><input type="text" name="name" value="${escape(s.name ?? '')}" required /></label>
-      <label><span>Cron</span><input type="text" name="cron" value="${escape(s.cron ?? '')}" required /></label>
+      ${whenMarkup}
       <p class="preview" id="preview">—</p>
       <label><span>Mensagem</span><select name="messageId" required>${options}</select></label>
       <fieldset><legend>Grupos</legend>${groupsMarkup}</fieldset>
@@ -355,7 +454,7 @@ document.addEventListener('click', (evt) => {
 });
 
 document.addEventListener('input', (evt) => {
-  if (evt.target.name === 'cron') updatePreview(evt.target.value);
+  if (['day', 'time', 'cron'].includes(evt.target.name)) updatePreview(formCron(evt.target.form));
 });
 
 document.addEventListener('submit', (evt) => {
@@ -364,6 +463,13 @@ document.addEventListener('submit', (evt) => {
 
   withErrorHandling(async () => {
     if (form.id === 'form-schedule') {
+      // O horário e o cron cru já são obrigatórios no próprio campo; o que o
+      // navegador não barra é nenhum dia marcado.
+      const cron = formCron(form);
+      if (!cron) {
+        throw new Error('Selecione ao menos um dia da semana e o horário.');
+      }
+
       const groups = formGroups(form);
       // A API recusa lista vazia com 400. Barrar aqui evita a ida e volta e
       // deixa claro que desmarcar tudo não significa "herda os defaults".
@@ -373,7 +479,7 @@ document.addEventListener('submit', (evt) => {
 
       const payload = {
         name: form.name.value,
-        cron: form.cron.value,
+        cron,
         messageId: form.messageId.value,
         groups,
       };

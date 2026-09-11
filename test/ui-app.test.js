@@ -14,6 +14,9 @@ const APP_SOURCE = readFileSync(new URL('../public/app.js', import.meta.url), 'u
 function loadApp({ fetch } = {}) {
   const elements = new Map();
   const newElement = () => ({ textContent: '', className: '', hidden: false, innerHTML: '' });
+  // Guarda os handlers que o app registra no document, para o teste poder
+  // disparar um evento de mentira (ex.: "input" num campo do formulário).
+  const listeners = {};
 
   const sandbox = {
     document: {
@@ -22,7 +25,9 @@ function loadApp({ fetch } = {}) {
         return elements.get(selector);
       },
       querySelectorAll: () => [],
-      addEventListener: () => {},
+      addEventListener: (type, handler) => {
+        listeners[type] = handler;
+      },
     },
     // A carga inicial (load()) roda ao avaliar o arquivo: sem rede, ela
     // falha e cai no notify() do próprio app — que aqui escreve num
@@ -48,6 +53,16 @@ function loadApp({ fetch } = {}) {
     // Copia para um array deste realm: o array devolvido lá dentro tem outro
     // Array.prototype e reprovaria em assert.deepEqual (que é estrito).
     formGroups: (form) => [...formGroups(form)],
+    // Resolvidas na chamada, e não aqui: uma função que ainda não existe no
+    // app derruba só o teste que a usa, não o loadApp de todos.
+    buildCron: (days, time) => runInContext('buildCron', sandbox)(days, time),
+    parseCron: (expr) => {
+      const parsed = runInContext('parseCron', sandbox)(expr);
+      return parsed && { days: [...parsed.days], time: parsed.time };
+    },
+    describeCron: (expr) => runInContext('describeCron', sandbox)(expr),
+    formCron: (form) => runInContext('formCron', sandbox)(form),
+    dispatch: (type, evt) => listeners[type](evt),
   };
 }
 
@@ -60,23 +75,28 @@ const unescapeHtml = (value) =>
     .replace(/&amp;/g, '&');
 
 // Form de mentira montado a partir do HTML que scheduleForm() devolveu, com
-// só o que formGroups() consulta. É o elo que fecha a prova: o que o
-// formulário desenha é exatamente o que vira payload do save.
+// só o que formGroups() e formCron() consultam. É o elo que fecha a prova: o
+// que o formulário desenha é exatamente o que vira payload do save.
 function fakeForm(html) {
-  const inputs = [...html.matchAll(/<input\b[^>]*>/g)].map((m) => m[0]);
-  const checkedGroups = inputs
-    .filter((tag) => /name="group"/.test(tag) && /\bchecked\b/.test(tag))
-    .map((tag) => ({ value: unescapeHtml(/value="([^"]*)"/.exec(tag)[1]) }));
-
-  const freeText = inputs.find((tag) => /id="groups-text"/.test(tag));
+  const inputs = [...html.matchAll(/<input\b[^>]*>/g)].map(([tag]) => {
+    const attr = (name) => {
+      const found = new RegExp(`\\s${name}="([^"]*)"`).exec(tag);
+      return found ? unescapeHtml(found[1]) : undefined;
+    };
+    return { id: attr('id'), name: attr('name'), value: attr('value') ?? '', checked: /\bchecked\b/.test(tag) };
+  });
 
   return {
-    querySelector: (selector) =>
-      selector === '#groups-text' && freeText
-        ? { value: unescapeHtml(/value="([^"]*)"/.exec(freeText)[1]) }
-        : null,
-    querySelectorAll: (selector) =>
-      selector === 'input[name="group"]:checked' ? checkedGroups : [],
+    querySelector: (selector) => {
+      const byId = /^#(.+)$/.exec(selector);
+      if (byId) return inputs.find((i) => i.id === byId[1]) ?? null;
+      const byName = /^input\[name="([^"]+)"\]$/.exec(selector);
+      return byName ? inputs.find((i) => i.name === byName[1]) ?? null : null;
+    },
+    querySelectorAll: (selector) => {
+      const checked = /^input\[name="([^"]+)"\]:checked$/.exec(selector);
+      return checked ? inputs.filter((i) => i.name === checked[1] && i.checked) : [];
+    },
   };
 }
 
@@ -191,4 +211,142 @@ test('com o WAHA fora do ar, o campo livre já vem com os ids salvos', () => {
     [SAVED_UNKNOWN_GROUP, KNOWN_GROUP],
     'os destinos salvos têm que sobreviver também quando o WAHA está fora do ar'
   );
+});
+
+// ---------- Dias da semana e horário no lugar do cron ----------
+
+// fetch que responde só à prévia do cron e anota o que foi pedido.
+function previewFetch(requested) {
+  return async (url) => {
+    requested.push(url);
+    if (!url.startsWith('/api/cron/preview')) throw new Error('rede desligada no teste');
+    return { ok: true, status: 200, json: async () => ({ valid: true, next: ['2026-09-14T12:00:00.000Z'] }) };
+  };
+}
+
+test('dias e horário viram cron, com o domingo como 0', () => {
+  const app = loadApp();
+  assert.equal(app.buildCron([1, 3, 5], '09:00'), '0 9 * * 1,3,5');
+  assert.equal(app.buildCron([6, 0], '18:30'), '30 18 * * 0,6');
+});
+
+test('todos os dias marcados viram "*" no dia da semana', () => {
+  const app = loadApp();
+  assert.equal(app.buildCron([0, 1, 2, 3, 4, 5, 6], '07:05'), '5 7 * * *');
+});
+
+test('cron de dias e horário volta para o formulário, com faixas e domingo como 7', () => {
+  const app = loadApp();
+  assert.deepEqual(app.parseCron('0 9 * * 1-5'), { days: [1, 2, 3, 4, 5], time: '09:00' });
+  assert.deepEqual(app.parseCron('30 18 * * 7'), { days: [0], time: '18:30' });
+  assert.deepEqual(app.parseCron('5 7 * * *'), { days: [0, 1, 2, 3, 4, 5, 6], time: '07:05' });
+});
+
+test('cron que não cabe em dias e horário não é convertido', () => {
+  const app = loadApp();
+  const custom = ['*/15 * * * *', '0 9 1 * *', '0 9 * 1 *', '0 0 9 * * 1', '0 9 * * MON', '0 9-18 * * 1', '0 24 * * 1'];
+  for (const expr of custom) {
+    assert.equal(app.parseCron(expr), null, `"${expr}" não pode virar dias e horário`);
+  }
+});
+
+test('a lista descreve quando o agendamento dispara, com a semana começando na segunda', () => {
+  const app = loadApp();
+  assert.equal(app.describeCron('0 9 * * 1,3,5'), 'Seg, Qua e Sex às 09:00');
+  assert.equal(app.describeCron('0 9 * * *'), 'Todo dia às 09:00');
+  assert.equal(app.describeCron('5 7 * * 0'), 'Dom às 07:05');
+  assert.equal(app.describeCron('0 9 * * 0,6'), 'Sáb e Dom às 09:00');
+  assert.equal(app.describeCron('*/15 * * * *'), null, 'cron personalizado não tem descrição');
+});
+
+test('agendamento salvo abre com os dias marcados e o horário preenchido', () => {
+  const app = loadApp();
+  app.state.groups = [{ id: KNOWN_GROUP, name: 'Grupo Alpha' }];
+  editingSchedule(app, [KNOWN_GROUP]);
+  app.state.editing.data.cron = '30 8 * * 1,3';
+
+  const form = fakeForm(app.scheduleForm());
+
+  assert.deepEqual(form.querySelectorAll('input[name="day"]:checked').map((i) => i.value), ['1', '3']);
+  assert.equal(form.querySelector('input[name="time"]').value, '08:30');
+  assert.equal(form.querySelector('input[name="cron"]'), null, 'cron de dias e horário não mostra o campo cru');
+});
+
+test('salvar sem mexer mantém o mesmo cron de dias e horário', () => {
+  const app = loadApp();
+  app.state.groups = [{ id: KNOWN_GROUP, name: 'Grupo Alpha' }];
+  editingSchedule(app, [KNOWN_GROUP]);
+  app.state.editing.data.cron = '30 8 * * 1,3';
+
+  assert.equal(app.formCron(fakeForm(app.scheduleForm())), '30 8 * * 1,3');
+});
+
+// Um cron editado à mão que não cabe em dias e horário não pode ser trocado
+// por outro em silêncio só porque o usuário abriu e salvou o agendamento.
+test('cron personalizado aparece como está, sinalizado, e salvar sem mexer o mantém', () => {
+  const app = loadApp();
+  app.state.groups = [{ id: KNOWN_GROUP, name: 'Grupo Alpha' }];
+  editingSchedule(app, [KNOWN_GROUP]);
+  app.state.editing.data.cron = '*/15 * * * *';
+
+  const html = app.scheduleForm();
+
+  assert.match(html, /cron personalizado/i, 'o usuário tem que ver por que não há dias e horário');
+  assert.equal(app.formCron(fakeForm(html)), '*/15 * * * *');
+});
+
+test('agendamento novo abre sem dia marcado e sem horário', () => {
+  const app = loadApp();
+  app.state.groups = [{ id: KNOWN_GROUP, name: 'Grupo Alpha' }];
+  app.state.messages = [{ id: 'msg-a', name: 'Oi' }];
+  app.state.editing = { type: 'schedule', data: { messageId: 'msg-a', groups: [] } };
+
+  const form = fakeForm(app.scheduleForm());
+
+  assert.equal(form.querySelectorAll('input[name="day"]:checked').length, 0);
+  assert.equal(form.querySelector('input[name="time"]').value, '');
+  assert.equal(app.formCron(form), '', 'sem dia nem horário não sai cron');
+});
+
+test('sem nenhum dia marcado não sai cron, mesmo com horário', () => {
+  const app = loadApp();
+  const form = {
+    querySelector: (selector) => (selector === 'input[name="time"]' ? { value: '09:00' } : null),
+    querySelectorAll: () => [],
+  };
+
+  assert.equal(app.formCron(form), '');
+});
+
+test('mexer nos dias ou no horário atualiza a prévia com o cron montado', async () => {
+  const requested = [];
+  const app = loadApp({ fetch: previewFetch(requested) });
+  app.state.groups = [{ id: KNOWN_GROUP, name: 'Grupo Alpha' }];
+  editingSchedule(app, [KNOWN_GROUP]);
+  app.state.editing.data.cron = '0 9 * * 1,3';
+  const form = fakeForm(app.scheduleForm());
+
+  app.dispatch('input', { target: { name: 'day', form } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.ok(
+    requested.includes(`/api/cron/preview?expr=${encodeURIComponent('0 9 * * 1,3')}`),
+    'a prévia tem que ser pedida para o cron que os dias e o horário formam'
+  );
+});
+
+test('a lista mostra quando dispara por extenso e o cron personalizado cru', () => {
+  const app = loadApp();
+  app.state.messages = [{ id: 'msg-a', name: 'Oi' }];
+  app.state.schedules = [
+    { id: 'a', name: 'semana', cron: '0 9 * * 1-5', messageId: 'msg-a', groups: [KNOWN_GROUP], enabled: true },
+    { id: 'b', name: 'quinze', cron: '*/15 * * * *', messageId: 'msg-a', groups: [KNOWN_GROUP], enabled: true },
+  ];
+
+  app.renderSchedules();
+  const html = app.element('#schedules').innerHTML;
+
+  assert.match(html, /<th>Quando<\/th>/);
+  assert.match(html, /Seg, Ter, Qua, Qui e Sex às 09:00/);
+  assert.match(html, /<code>\*\/15 \* \* \* \*<\/code>/);
 });
