@@ -11,7 +11,7 @@ import { createContext, runInContext } from 'node:vm';
 
 const APP_SOURCE = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
-function loadApp() {
+function loadApp({ fetch } = {}) {
   const elements = new Map();
   const newElement = () => ({ textContent: '', className: '', hidden: false, innerHTML: '' });
 
@@ -27,9 +27,9 @@ function loadApp() {
     // A carga inicial (load()) roda ao avaliar o arquivo: sem rede, ela
     // falha e cai no notify() do próprio app — que aqui escreve num
     // elemento de mentira. Nenhum teste depende dela.
-    fetch: async () => {
+    fetch: fetch ?? (async () => {
       throw new Error('rede desligada no teste');
-    },
+    }),
     setTimeout,
     clearTimeout,
     console,
@@ -43,6 +43,8 @@ function loadApp() {
   return {
     state: runInContext('state', sandbox),
     scheduleForm: runInContext('scheduleForm', sandbox),
+    renderSchedules: runInContext('renderSchedules', sandbox),
+    element: (selector) => sandbox.document.querySelector(selector),
     // Copia para um array deste realm: o array devolvido lá dentro tem outro
     // Array.prototype e reprovaria em assert.deepEqual (que é estrito).
     formGroups: (form) => [...formGroups(form)],
@@ -146,6 +148,34 @@ test('agendamento novo sem grupos não marca nada', () => {
   app.state.editing = { type: 'schedule', data: { messageId: 'msg-a', groups: [] } };
 
   assert.deepEqual(app.formGroups(fakeForm(app.scheduleForm())), []);
+});
+
+// O cron de um agendamento salvo já vem preenchido no formulário: se a prévia
+// esperasse o usuário digitar, abrir "Editar" mostraria só "—".
+test('abrir um agendamento salvo já mostra a prévia do cron dele', async () => {
+  const requested = [];
+  const app = loadApp({
+    fetch: async (url) => {
+      requested.push(url);
+      if (!url.startsWith('/api/cron/preview')) throw new Error('rede desligada no teste');
+      return { ok: true, status: 200, json: async () => ({ valid: true, next: ['2026-09-14T12:00:00.000Z'] }) };
+    },
+  });
+  app.state.groups = [{ id: KNOWN_GROUP, name: 'Grupo Alpha' }];
+  editingSchedule(app, [KNOWN_GROUP]);
+
+  app.renderSchedules();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.ok(
+    requested.includes(`/api/cron/preview?expr=${encodeURIComponent('0 9 * * 1')}`),
+    'a prévia tem que ser pedida para o cron do agendamento aberto'
+  );
+  assert.match(
+    app.element('#preview').textContent,
+    /^Próximos: /,
+    'a prévia tem que aparecer sem o usuário mexer no campo'
+  );
 });
 
 test('com o WAHA fora do ar, o campo livre já vem com os ids salvos', () => {

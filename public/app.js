@@ -103,6 +103,10 @@ function renderSchedules() {
            <tr><th>Nome</th><th>Cron</th><th>Mensagem</th><th>Grupos</th><th>Estado</th><th></th></tr>
            ${rows}
          </table>`}`;
+
+  // O formulário acabou de ser desenhado com o cron já preenchido: sem isto,
+  // a prévia ficaria em "—" até o usuário mexer no campo.
+  if (state.editing?.type === 'schedule') updatePreview(state.editing.data.cron ?? '');
 }
 
 function scheduleForm() {

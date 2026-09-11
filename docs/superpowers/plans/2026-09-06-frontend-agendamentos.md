@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-06-frontend-agendamentos-design.md`
 
+**Status:** concluído. As 10 tasks foram fundidas no `main` pelo PR #1 em 2026-09-08.
+
 ## Global Constraints
 
 Copiadas do `CLAUDE.md` e do spec. Valem para **todas** as tasks.
@@ -45,7 +47,7 @@ Tira do repositório público o arquivo onde a tela vai gravar ids de grupos rea
 - Consumes: nada (primeira task)
 - Produces: `config.schedulesPath` passa a apontar para `./data/schedules.json` por default
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Em `test/config.test.js`, dentro do teste `'aplica defaults quando o ambiente está vazio'`, troque a asserção de `schedulesPath`:
 
@@ -53,12 +55,12 @@ Em `test/config.test.js`, dentro do teste `'aplica defaults quando o ambiente es
   assert.equal(cfg.schedulesPath, './data/schedules.json');
 ```
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+- [x] **Step 2: Rodar e confirmar que falha**
 
 Run: `npm test`
 Expected: FAIL — `Expected: './data/schedules.json'` / `Actual: './schedules.json'`
 
-- [ ] **Step 3: Alterar o default**
+- [x] **Step 3: Alterar o default**
 
 Em `src/config.js`, no objeto `DEFAULTS`:
 
@@ -66,7 +68,7 @@ Em `src/config.js`, no objeto `DEFAULTS`:
   SCHEDULES_PATH: './data/schedules.json',
 ```
 
-- [ ] **Step 4: Renomear o arquivo de exemplo e ajustar o teste que o lê**
+- [x] **Step 4: Renomear o arquivo de exemplo e ajustar o teste que o lê**
 
 ```bash
 git mv schedules.json schedules.example.json
@@ -81,7 +83,7 @@ test('schedules.example.json do repositório é válido', () => {
 });
 ```
 
-- [ ] **Step 5: Ignorar `data/`**
+- [x] **Step 5: Ignorar `data/`**
 
 Acrescente ao `.gitignore`, depois da linha `logs/`:
 
@@ -89,7 +91,7 @@ Acrescente ao `.gitignore`, depois da linha `logs/`:
 data/
 ```
 
-- [ ] **Step 6: Documentar**
+- [x] **Step 6: Documentar**
 
 Em `.env.example`, troque a linha do caminho:
 
@@ -106,14 +108,14 @@ mkdir -p data && cp schedules.example.json data/schedules.json
 
 E na tabela de variáveis, mude o default de `SCHEDULES_PATH` para `./data/schedules.json`.
 
-- [ ] **Step 7: Rodar tudo**
+- [x] **Step 7: Rodar tudo**
 
 Run: `npm test && node harness/run.js all`
 Expected: 24 testes passam, 18 checks do harness passam.
 
 Se o harness falhar aqui, pare: ele injeta `SCHEDULES_PATH` por env em todas as fases, então não deveria ser afetado por mudança de default.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A
@@ -138,7 +140,7 @@ O coração do plano. Extrai as regras de validação de dentro do loader para q
   - `normalizeStore(parsed)` → `{ version: 2, defaultGroups, messages, schedules }`; aceita v1 e v2
   - `loadSchedules(path)` → mesma forma de antes **mais** `messages`, e cada schedule ganha `message` (texto resolvido) além de `messageId`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 Acrescente em `test/schedules.test.js`:
 
@@ -206,12 +208,12 @@ test('loadSchedules entrega o texto da mensagem resolvido em cada agendamento', 
 });
 ```
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+- [x] **Step 2: Rodar e confirmar que falha**
 
 Run: `npm test`
 Expected: FAIL — `validateMessage is not a function` (e as demais importações novas).
 
-- [ ] **Step 3: Reescrever `src/schedules.js`**
+- [x] **Step 3: Reescrever `src/schedules.js`**
 
 Substitua o conteúdo inteiro:
 
@@ -398,7 +400,7 @@ export function loadSchedules(path = config.schedulesPath) {
 }
 ```
 
-- [ ] **Step 4: Ajustar os testes antigos que usavam `message` inline**
+- [x] **Step 4: Ajustar os testes antigos que usavam `message` inline**
 
 Os testes existentes de `schedules.test.js` escritos para o v1 continuam válidos como cobertura de retrocompatibilidade — o `normalizeStore` os aceita. Apenas o teste `'campos obrigatórios ausentes são recusados'` precisa do caso novo; substitua o corpo por:
 
@@ -414,12 +416,12 @@ test('campos obrigatórios ausentes são recusados', () => {
 });
 ```
 
-- [ ] **Step 5: Rodar os testes**
+- [x] **Step 5: Rodar os testes**
 
 Run: `npm test`
 Expected: PASS, com os testes novos de `validateMessage`, `validateSchedule` e `normalizeStore` verdes.
 
-- [ ] **Step 6: Ajustar `src/index.js` para o campo resolvido**
+- [x] **Step 6: Ajustar `src/index.js` para o campo resolvido**
 
 O scheduler já usa `item.message`, que agora vem resolvido do `messageId` — nenhuma mudança de código é necessária. Confirme rodando:
 
@@ -428,12 +430,12 @@ Expected: 4 checks passam.
 
 Se a fase 3 falhar, é porque o harness escreve schedules no formato v1 com `message` inline — o que o `normalizeStore` aceita. Investigue antes de mudar qualquer coisa em `harness/`, que é proibido alterar.
 
-- [ ] **Step 7: Regressão completa**
+- [x] **Step 7: Regressão completa**
 
 Run: `npm test && node harness/run.js all`
 Expected: todos os testes e os 18 checks passam.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A
@@ -456,7 +458,7 @@ A camada que grava o arquivo. Escrita atômica via `rename()` para o scheduler n
   - `readStore(path)` → objeto v2 validado (sem o campo `message` resolvido)
   - `updateStore(path, mutator)` → aplica `mutator(store)`, valida, grava atomicamente, devolve o store gravado. Escritas concorrentes são serializadas.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `test/store.test.js`:
 
@@ -536,12 +538,12 @@ test('escritas concorrentes são serializadas, sem perder nenhuma', async () => 
 });
 ```
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+- [x] **Step 2: Rodar e confirmar que falha**
 
 Run: `npm test`
 Expected: FAIL — `Cannot find module '../src/ui/store.js'`
 
-- [ ] **Step 3: Implementar o store**
+- [x] **Step 3: Implementar o store**
 
 Crie `src/ui/store.js`:
 
@@ -615,14 +617,14 @@ export function updateStore(path, mutator) {
 }
 ```
 
-- [ ] **Step 4: Rodar os testes**
+- [x] **Step 4: Rodar os testes**
 
 Run: `npm test`
 Expected: PASS, os 5 testes de store verdes.
 
 Se `escritas concorrentes são serializadas` falhar com menos de 10 mensagens, a fila não está encadeando — confira que `queue` é reatribuída a cada chamada.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/store.js test/store.test.js
@@ -643,7 +645,7 @@ O scheduler passa a aplicar mudanças do arquivo sem reinício. A regra que não
 - Consumes: `loadSchedules(path)` de `src/schedules.js`; `broadcast()` de `src/broadcast.js`
 - Produces: `startScheduler({ schedulesPath, cfg })` → `{ reload(), stop(), get activeNames() }`. Exportado de `src/index.js` para poder ser testado sem subir processo.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `test/scheduler-reload.test.js`:
 
@@ -721,12 +723,12 @@ test('agendamento desabilitado não entra nos ativos', (t) => {
 });
 ```
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+- [x] **Step 2: Rodar e confirmar que falha**
 
 Run: `npm test`
 Expected: FAIL — `startScheduler is not a function`
 
-- [ ] **Step 3: Reescrever `src/index.js`**
+- [x] **Step 3: Reescrever `src/index.js`**
 
 Substitua o conteúdo inteiro:
 
@@ -875,19 +877,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 ```
 
-- [ ] **Step 4: Rodar os testes**
+- [x] **Step 4: Rodar os testes**
 
 Run: `npm test`
 Expected: PASS, os 3 testes de reload verdes.
 
-- [ ] **Step 5: Confirmar que a fase 3 do harness ainda passa**
+- [x] **Step 5: Confirmar que a fase 3 do harness ainda passa**
 
 Run: `node harness/run.js phase3`
 Expected: 4 checks passam.
 
 Atenção: a fase 3 depende do processo **abortar** com cron inválido no boot e **seguir vivo** com config válida. O bloco `import.meta.url` acima preserva os dois comportamentos. Se falhar, o problema está nesse bloco, não no harness — que é proibido alterar.
 
-- [ ] **Step 6: Teste manual da recarga**
+- [x] **Step 6: Teste manual da recarga**
 
 ```bash
 mkdir -p /tmp/waha-manual && cp schedules.example.json /tmp/waha-manual/schedules.json
@@ -896,12 +898,12 @@ SCHEDULES_PATH=/tmp/waha-manual/schedules.json npm start
 
 Em outro terminal, edite `/tmp/waha-manual/schedules.json` (mude `enabled` para `true`) e salve. O processo deve logar `Configuração recarregada` em menos de um segundo, sem reiniciar. Encerre com Ctrl+C.
 
-- [ ] **Step 7: Regressão completa**
+- [x] **Step 7: Regressão completa**
 
 Run: `npm test && node harness/run.js all`
 Expected: todos os testes e os 18 checks passam.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A
@@ -930,7 +932,7 @@ A base da UI: `node:http` em `127.0.0.1`, roteador simples e servir os estático
 - Consumes: `readStore`/`updateStore` de `src/ui/store.js`; `config` de `src/config.js`
 - Produces: `createServer({ schedulesPath, cfg })` → instância `http.Server` não iniciada; `startUi({ schedulesPath, cfg })` → `Promise<{ server, port }>` já escutando
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `test/ui-server.test.js`:
 
@@ -986,12 +988,12 @@ test('recusa travessia de diretório nos estáticos', async (t) => {
 });
 ```
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+- [x] **Step 2: Rodar e confirmar que falha**
 
 Run: `npm test`
 Expected: FAIL — `Cannot find module '../src/ui/server.js'`
 
-- [ ] **Step 3: Acrescentar as variáveis de UI ao config**
+- [x] **Step 3: Acrescentar as variáveis de UI ao config**
 
 Em `src/config.js`, no `DEFAULTS`:
 
@@ -1007,7 +1009,7 @@ E no objeto devolvido por `loadConfig`, antes do fechamento:
     uiHost: env.UI_HOST ?? DEFAULTS.UI_HOST,
 ```
 
-- [ ] **Step 4: Implementar o servidor**
+- [x] **Step 4: Implementar o servidor**
 
 Crie `src/ui/server.js`:
 
@@ -1146,7 +1148,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 ```
 
-- [ ] **Step 5: Criar os estáticos mínimos**
+- [x] **Step 5: Criar os estáticos mínimos**
 
 `public/index.html` — o conteúdo real vem na Task 9; por ora, só o bastante para o teste passar:
 
@@ -1179,7 +1181,7 @@ body { font: 15px/1.5 system-ui, sans-serif; margin: 0; }
 // A tela é construída na Task 9.
 ```
 
-- [ ] **Step 6: Registrar o script e documentar**
+- [x] **Step 6: Registrar o script e documentar**
 
 Em `package.json`, nos scripts:
 
@@ -1195,12 +1197,12 @@ UI_PORT=3000
 UI_HOST=127.0.0.1
 ```
 
-- [ ] **Step 7: Rodar os testes**
+- [x] **Step 7: Rodar os testes**
 
 Run: `npm test`
 Expected: PASS, os 3 testes de servidor verdes.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A
@@ -1222,7 +1224,7 @@ CRUD da biblioteca, com a regra que protege os disparos: excluir mensagem em uso
 - Consumes: `readStore`, `updateStore` de `src/ui/store.js`; `validateMessage` de `src/schedules.js`
 - Produces: `messageRoutes` → objeto `{ 'GET /api/messages': fn, ... }`, no formato que `createServer` consome. Cada `fn({ body, params, schedulesPath })` devolve `{ status, body }`.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `test/ui-messages.test.js`:
 
@@ -1305,12 +1307,12 @@ test('editar mensagem inexistente responde 404', async (t) => {
 });
 ```
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+- [x] **Step 2: Rodar e confirmar que falha**
 
 Run: `npm test`
 Expected: FAIL — 404 nas rotas de `/api/messages`, porque ainda não existem.
 
-- [ ] **Step 3: Implementar as rotas**
+- [x] **Step 3: Implementar as rotas**
 
 Crie `src/ui/routes/messages.js`:
 
@@ -1382,7 +1384,7 @@ export const messageRoutes = {
 };
 ```
 
-- [ ] **Step 4: Fazer a validação virar 400**
+- [x] **Step 4: Fazer a validação virar 400**
 
 Em `src/ui/server.js`, no `catch` do handler, os erros de validação (`Error` sem `status`) devem virar 400, não 500. Troque a linha do catch:
 
@@ -1395,7 +1397,7 @@ Em `src/ui/server.js`, no `catch` do handler, os erros de validação (`Error` s
     }
 ```
 
-- [ ] **Step 5: Registrar as rotas**
+- [x] **Step 5: Registrar as rotas**
 
 Em `src/ui/server.js`, importe e componha com as rotas recebidas:
 
@@ -1410,12 +1412,12 @@ E dentro de `createServer`, troque a desestruturação de `routes`:
   const routes = { ...messageRoutes, ...extra };
 ```
 
-- [ ] **Step 6: Rodar os testes**
+- [x] **Step 6: Rodar os testes**
 
 Run: `npm test`
 Expected: PASS, os 4 testes de mensagens verdes.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A
@@ -1437,7 +1439,7 @@ CRUD dos agendamentos mais o `PATCH` do toggle. A validação é a mesma do load
 - Consumes: `readStore`, `updateStore` de `src/ui/store.js`; `validateSchedule` de `src/schedules.js`
 - Produces: `scheduleRoutes` no mesmo formato de `messageRoutes`
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `test/ui-schedules.test.js`:
 
@@ -1530,12 +1532,12 @@ test('nome duplicado responde 400', async (t) => {
 });
 ```
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+- [x] **Step 2: Rodar e confirmar que falha**
 
 Run: `npm test`
 Expected: FAIL — 404 nas rotas `/api/schedules`.
 
-- [ ] **Step 3: Implementar as rotas**
+- [x] **Step 3: Implementar as rotas**
 
 Crie `src/ui/routes/schedules.js`:
 
@@ -1621,7 +1623,7 @@ export const scheduleRoutes = {
 };
 ```
 
-- [ ] **Step 4: Registrar as rotas**
+- [x] **Step 4: Registrar as rotas**
 
 Em `src/ui/server.js`:
 
@@ -1635,12 +1637,12 @@ E na composição dentro de `createServer`:
   const routes = { ...messageRoutes, ...scheduleRoutes, ...extra };
 ```
 
-- [ ] **Step 5: Rodar os testes**
+- [x] **Step 5: Rodar os testes**
 
 Run: `npm test`
 Expected: PASS, os 5 testes de agendamentos verdes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A
@@ -1662,7 +1664,7 @@ As três rotas que ligam a tela ao mundo: seletor de grupos, log de envios e o b
 - Consumes: `listGroups(cfg)` de `src/waha/client.js`; `broadcast()` de `src/broadcast.js`; `readStore` de `src/ui/store.js`
 - Produces: `actionRoutes` no mesmo formato das anteriores
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `test/ui-actions.test.js`. Usa o mock do harness numa porta própria (3995), para não colidir com o harness nem com os outros arquivos de teste:
 
@@ -1760,12 +1762,12 @@ test('histórico devolve as linhas do log, mais recentes primeiro', async (t) =>
 });
 ```
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+- [x] **Step 2: Rodar e confirmar que falha**
 
 Run: `npm test`
 Expected: FAIL — 404 em `/api/groups`, `/api/logs` e `/api/schedules/:id/run`.
 
-- [ ] **Step 3: Implementar as rotas**
+- [x] **Step 3: Implementar as rotas**
 
 Crie `src/ui/routes/actions.js`:
 
@@ -1837,7 +1839,7 @@ export const actionRoutes = {
 };
 ```
 
-- [ ] **Step 4: Registrar as rotas**
+- [x] **Step 4: Registrar as rotas**
 
 Em `src/ui/server.js`:
 
@@ -1849,19 +1851,19 @@ import { actionRoutes } from './routes/actions.js';
   const routes = { ...messageRoutes, ...scheduleRoutes, ...actionRoutes, ...extra };
 ```
 
-- [ ] **Step 5: Rodar os testes**
+- [x] **Step 5: Rodar os testes**
 
 Run: `npm test`
 Expected: PASS, os 5 testes de ações verdes.
 
 Confira no output que **nenhuma** chamada saiu para fora de `localhost:3995` — todo envio tem que passar pelo mock.
 
-- [ ] **Step 6: Regressão completa**
+- [x] **Step 6: Regressão completa**
 
 Run: `npm test && node harness/run.js all`
 Expected: todos os testes e os 18 checks passam.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A
@@ -1882,7 +1884,7 @@ A interface em si. Inclui uma rota que faltou no spec: o preview do cron usa `ge
 - Consumes: todas as rotas das Tasks 6, 7 e 8
 - Produces: `GET /api/cron/preview?expr=<cron>` → `{ valid: boolean, next: string[] }` com os 3 próximos disparos em ISO
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Acrescente em `test/ui-actions.test.js`:
 
@@ -1901,12 +1903,12 @@ test('preview de cron devolve os próximos disparos', async (t) => {
 });
 ```
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+- [x] **Step 2: Rodar e confirmar que falha**
 
 Run: `npm test`
 Expected: FAIL — 404 em `/api/cron/preview`.
 
-- [ ] **Step 3: Implementar a rota de preview**
+- [x] **Step 3: Implementar a rota de preview**
 
 Em `src/ui/routes/actions.js`, acrescente ao topo:
 
@@ -1932,7 +1934,7 @@ E acrescente a rota ao objeto `actionRoutes`:
   },
 ```
 
-- [ ] **Step 4: Rodar o teste do preview**
+- [x] **Step 4: Rodar o teste do preview**
 
 Run: `npm test`
 Expected: PASS.
@@ -1940,7 +1942,7 @@ Expected: PASS.
 Se `getNextRuns(3)` devolver formato diferente do esperado, confira a assinatura com:
 `node -e "import('node-cron').then(m=>{const t=m.schedule('0 9 * * 1',()=>{});console.log(t.getNextRuns(3));t.destroy()})"`
 
-- [ ] **Step 5: Escrever o HTML**
+- [x] **Step 5: Escrever o HTML**
 
 Substitua `public/index.html`:
 
@@ -1976,7 +1978,7 @@ Substitua `public/index.html`:
 </html>
 ```
 
-- [ ] **Step 6: Escrever o CSS**
+- [x] **Step 6: Escrever o CSS**
 
 Substitua `public/style.css`:
 
@@ -2029,7 +2031,7 @@ fieldset label { display: block; font-weight: 400; margin: 0; }
 .vazio { opacity: .7; padding: 1rem 0; }
 ```
 
-- [ ] **Step 7: Escrever a tela**
+- [x] **Step 7: Escrever a tela**
 
 Substitua `public/app.js`:
 
@@ -2334,12 +2336,12 @@ document.addEventListener('submit', (evento) => {
 carregar().catch((err) => avisar(err.message));
 ```
 
-- [ ] **Step 8: Rodar os testes**
+- [x] **Step 8: Rodar os testes**
 
 Run: `npm test`
 Expected: PASS, incluindo o preview de cron.
 
-- [ ] **Step 9: Verificar a tela no navegador**
+- [x] **Step 9: Verificar a tela no navegador**
 
 ```bash
 node harness/mock-waha.js &
@@ -2359,7 +2361,7 @@ Abra `http://127.0.0.1:3000` e confirme, um a um:
 
 Encerre com Ctrl+C e `pkill -f harness/mock-waha.js`.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add -A
@@ -2380,7 +2382,7 @@ Fecha o ciclo: os dois processos rodando juntos, a recarga valendo de ponta a po
 - Consumes: tudo das Tasks 1–9
 - Produces: nada de código novo
 
-- [ ] **Step 1: Verificar o fluxo completo com os dois processos**
+- [x] **Step 1: Verificar o fluxo completo com os dois processos**
 
 Em três terminais:
 
@@ -2402,13 +2404,13 @@ Expected: o terminal do `npm start` loga `Configuração recarregada` em menos d
 
 Este é o critério de aceitação central do projeto. Se a recarga não acontecer, o problema está no `watchFile` da Task 4 — investigue antes de seguir.
 
-- [ ] **Step 2: Verificar que config inválida não derruba o scheduler**
+- [x] **Step 2: Verificar que config inválida não derruba o scheduler**
 
 Com o `npm start` ainda rodando, edite `data/schedules.json` à mão e quebre o JSON (apague uma chave).
 
 Expected: o scheduler loga `Recarga ignorada, mantendo a configuração anterior` e **continua disparando**. Conserte o arquivo e confirme que ele volta a recarregar normalmente.
 
-- [ ] **Step 3: Acrescentar o script de conveniência**
+- [x] **Step 3: Acrescentar o script de conveniência**
 
 Em `package.json`, nos scripts:
 
@@ -2416,7 +2418,7 @@ Em `package.json`, nos scripts:
     "dev": "node harness/mock-waha.js & WAHA_URL=http://localhost:3999 npm run ui",
 ```
 
-- [ ] **Step 4: Documentar no README**
+- [x] **Step 4: Documentar no README**
 
 Acrescente uma seção **Tela de agendamentos**, depois de "Rodar o agendador":
 
@@ -2454,7 +2456,7 @@ E atualize a seção **schedules.json** para o formato v2, com `messages` e
 `messageId`, mencionando que o formato antigo (mensagem inline) continua sendo
 lido.
 
-- [ ] **Step 5: Atualizar a estrutura no README**
+- [x] **Step 5: Atualizar a estrutura no README**
 
 Na seção **Estrutura**, acrescente:
 
@@ -2466,7 +2468,7 @@ public/              A tela (HTML, CSS e JS vanilla)
 data/                Seus agendamentos (fora do versionamento)
 ```
 
-- [ ] **Step 6: Regressão final**
+- [x] **Step 6: Regressão final**
 
 Run: `npm test && node harness/run.js all`
 Expected: todos os testes passam e os **18 checks do harness** continuam verdes.
@@ -2476,12 +2478,12 @@ Confirme também que nenhuma dependência foi acrescentada:
 Run: `node -e "console.log(require('./package.json').dependencies)"`
 Expected: exatamente `{ dotenv, node-cron }`.
 
-- [ ] **Step 7: Confirmar que nada sensível vai para o repositório**
+- [x] **Step 7: Confirmar que nada sensível vai para o repositório**
 
 Run: `git status --porcelain && git check-ignore -v data/schedules.json`
 Expected: `data/schedules.json` aparece como ignorado, e nenhum id de grupo real está em arquivo versionado.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A

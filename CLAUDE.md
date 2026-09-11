@@ -1,6 +1,7 @@
-# CLAUDE.md — waha-scheduler
+# waha-scheduler — instruções para agentes
 
-Convenções e regras para trabalhar neste projeto.
+Convenções e regras para trabalhar neste projeto. O `AGENTS.md` é um link simbólico
+para este arquivo: edite só aqui.
 
 **Sobre a fonte da verdade funcional:** o `SPEC.md` citado abaixo nunca existiu neste
 repositório. O comportamento das fases 1 a 4 está definido pelos asserts de
