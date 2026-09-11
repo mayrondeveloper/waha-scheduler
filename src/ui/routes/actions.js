@@ -1,4 +1,5 @@
-// Rotas de apoio da tela: grupos do WAHA, histórico e disparo imediato.
+// Rotas de apoio da tela: grupos do WAHA, histórico, disparo imediato,
+// prévia de cron e status do agendador.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { schedule as scheduleCron } from 'node-cron';
@@ -6,6 +7,8 @@ import { readStore } from '../store.js';
 import { checkCron } from '../../schedules.js';
 import { listGroups } from '../../waha/client.js';
 import { broadcast } from '../../broadcast.js';
+import { statusPathFor, readStatus, schedulerState } from '../../scheduler-status.js';
+import { error } from '../../logger.js';
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -13,8 +16,26 @@ function httpError(status, message) {
   return err;
 }
 
+// Próximo disparo no fuso do agendador, pela mesma técnica do preview: cria a
+// task só para consultar e a destrói em seguida.
+function nextRunOf(expr, timezone) {
+  const task = scheduleCron(expr, () => {}, { timezone });
+  try {
+    const [next] = task.getNextRuns(1);
+    return next ? new Date(next).toISOString() : null;
+  } finally {
+    task.destroy();
+  }
+}
+
+function timezoneLabel(timeZone) {
+  const parts = new Intl.DateTimeFormat('pt-BR', { timeZone, timeZoneName: 'long' }).formatToParts(new Date());
+  return parts.find((p) => p.type === 'timeZoneName')?.value ?? timeZone;
+}
+
 /**
- * Rotas de grupos, histórico e disparo imediato, no formato consumido por createServer.
+ * Rotas de grupos, histórico, disparo imediato, prévia de cron e status do
+ * agendador, no formato consumido por createServer.
  * @type {Record<string, (ctx: object) => Promise<{status?: number, body: unknown}>>}
  */
 export const actionRoutes = {
@@ -97,5 +118,44 @@ export const actionRoutes = {
     } finally {
       task.destroy();
     }
+  },
+
+  'GET /api/status': async ({ schedulesPath, cfg }) => {
+    const now = Date.now();
+
+    // Status ilegível conta como parado para a tela, mas nunca em silêncio:
+    // o log do servidor da tela diz o que houve com o arquivo.
+    let status = null;
+    try {
+      status = readStatus(statusPathFor(schedulesPath));
+    } catch (err) {
+      error(`${err.message}. A tela vai mostrar o agendador como parado.`);
+    }
+
+    const nextRuns = {};
+    for (const schedule of readStore(schedulesPath).schedules) {
+      if (!schedule.enabled) continue;
+      try {
+        nextRuns[schedule.id] = nextRunOf(schedule.cron, cfg.timezone);
+      } catch (err) {
+        error(`Não foi possível calcular o próximo envio de "${schedule.name}": ${err.message}`);
+        nextRuns[schedule.id] = null;
+      }
+    }
+
+    return {
+      body: {
+        now: new Date(now).toISOString(),
+        timezone: cfg.timezone,
+        timezoneLabel: timezoneLabel(cfg.timezone),
+        scheduler: {
+          state: schedulerState(status, now),
+          startedAt: status?.startedAt ?? null,
+          beatAt: status?.beatAt ?? null,
+          reloadError: status?.reloadError ?? null,
+        },
+        nextRuns,
+      },
+    };
   },
 };
