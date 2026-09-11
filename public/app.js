@@ -726,7 +726,36 @@ function handleChange(evt) {
   }
 }
 
-function handleKeydown(evt) {
+// Esc, ou outro pedido de fechar do navegador, fecha a camada de cima: o
+// seletor de emojis, o modal (menos durante um envio) ou o painel, que
+// pergunta antes de descartar alteração.
+function dismissTopmost() {
+  const m = modal();
+  if (m.open) {
+    if (!state.sending) m.close();
+    return;
+  }
+  const d = drawer();
+  if (!d.open) return;
+  const panel = d.querySelector('[data-role="emoji-panel"]:not([hidden])');
+  if (panel) panel.hidden = true;
+  else requestCloseDrawer();
+}
+
+/**
+ * Teclado: Esc para as camadas abertas e ⌘B/⌘I no editor. Exportado para os testes.
+ * @param {KeyboardEvent} evt
+ */
+export function handleKeydown(evt) {
+  if (evt.key === 'Escape' && (modal().open || drawer().open)) {
+    // Cancelar o keydown impede o navegador de fechar o <dialog> sozinho: o
+    // Chrome deixa de respeitar o preventDefault do "cancel" a partir do
+    // segundo Esc seguido, e o painel fecharia sem perguntar.
+    evt.preventDefault();
+    dismissTopmost();
+    return;
+  }
+
   const target = evt.target;
   if (target.dataset?.editor === undefined || !(evt.metaKey || evt.ctrlKey)) return;
   const key = evt.key.toLowerCase();
@@ -767,13 +796,11 @@ export function start() {
   document.addEventListener('keydown', handleKeydown);
 
   const d = drawer();
-  // Esc fecha primeiro o seletor de emojis; depois pede para fechar o
-  // painel, perguntando se há alteração não salva.
+  // O Esc já é tratado no keydown; isto cobre os outros pedidos de fechar
+  // do navegador (o botão voltar do Android, por exemplo).
   d.addEventListener('cancel', (evt) => {
     evt.preventDefault();
-    const panel = d.querySelector('[data-role="emoji-panel"]:not([hidden])');
-    if (panel) panel.hidden = true;
-    else requestCloseDrawer();
+    dismissTopmost();
   });
   // Clique no fundo escurecido: o alvo é o próprio <dialog>, não o conteúdo.
   d.addEventListener('click', (evt) => {
@@ -786,7 +813,8 @@ export function start() {
 
   const m = modal();
   m.addEventListener('cancel', (evt) => {
-    if (state.sending) evt.preventDefault();
+    evt.preventDefault();
+    dismissTopmost();
   });
   m.addEventListener('click', (evt) => {
     if (evt.target === m && !state.sending) m.close();

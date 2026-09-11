@@ -4406,3 +4406,37 @@ npm test && node harness/run.js all
 
 Expected: todos os testes e os checks do harness passando.
 
+### Ajustes que a verificação trouxe
+
+Registrados aqui porque o código final difere dos blocos acima nestes pontos:
+
+1. **Cabeçalho dos blocos do formulário.** O link "Escrever nova" e o contador
+   de grupos caíam por cima do primeiro campo: o navegador desenha a `<legend>`
+   fora da área de conteúdo do `<fieldset>`, e o complemento posicionado com
+   `top: 0` ficava abaixo dela. Os blocos Quando, Mensagem e Grupos passaram a
+   ser `<div class="field" role="group" aria-labelledby>` montados por
+   `fieldGroup()` em `schedules-view.js`, com `.field-head` em flex no CSS. O
+   leitor de tela trata o grupo rotulado como um fieldset.
+2. **Esc tratado no `keydown`.** `handleKeydown` passou a ser exportado e,
+   com painel ou modal aberto, cancela o keydown do Esc e chama
+   `dismissTopmost()` (seletor de emojis, depois modal, depois painel). O
+   Chrome deixa de respeitar o `preventDefault` do evento `cancel` do
+   `<dialog>` a partir do segundo Esc seguido, e o painel fecharia sem
+   perguntar. Os listeners de `cancel` ficaram só para os outros pedidos de
+   fechar do navegador. Dois testes novos em `test/ui-app.test.js`.
+3. **Abas do seletor de emojis** quebram linha em vez de rolar na horizontal.
+4. **Prévia cortada da aba Mensagens**: espaço entre o marcador de lista e o
+   texto (`.message-snippet .wa-mark`).
+5. **Testes da prévia do WhatsApp**: `* oi *` no começo da linha é lista (como
+   no WhatsApp), então o caso de "espaço dentro dos asteriscos não formata"
+   passou para o meio da frase; e um teste novo prende que dígitos do texto
+   não se confundem com os trechos guardados por marcador.
+
+Verificado no navegador contra o mock: faixa de status nos estados parado,
+rodando (com o agendador de verdade disparando às 02:24 para o mock) e WAHA
+indisponível; criação com "Escrever nova", formatação pela barra e por ⌘I,
+emoji, busca de grupos; recarga do agendador ao salvar; envio imediato com
+falha listada, Esc ignorado durante o envio; histórico agrupado e filtros;
+exclusão recusada de mensagem em uso; "Descartar alterações?"; interruptor;
+menu "⋯"; tema claro, escuro e 375 px.
+

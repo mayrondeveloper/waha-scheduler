@@ -133,6 +133,45 @@ test('"Escrever nova": com o agendamento recusado, a mensagem fica escolhida e n
   assert.equal(app.state.editing, null, 'o painel fecha depois de salvar');
 });
 
+// O Esc é tratado no keydown: cancelado ali, o navegador não fecha o painel
+// por conta própria, e com alteração não salva a tela pergunta antes.
+test('Esc com alteração não salva pergunta antes de fechar o painel', () => {
+  const { fetch } = routedFetch({ 'GET /api/cron/preview': preview });
+  const $ = installDom(fetch);
+  resetState({
+    schedules: [{ id: 'sch-a', name: 'bom-dia', cron: '0 9 * * 1', messageId: 'msg-a', groups: [KNOWN_GROUP], enabled: true }],
+  });
+  app.openScheduleEditor('sch-a');
+  app.state.editing.snapshot = 'o formulário mudou desde que abriu';
+  // No DOM de mentira todo seletor acha algo; aqui, como no navegador, não
+  // há seletor de emojis aberto.
+  const drawer = $('#drawer');
+  const find = drawer.querySelector.bind(drawer);
+  drawer.querySelector = (selector) => (selector.includes('emoji-panel') ? null : find(selector));
+
+  let prevented = false;
+  app.handleKeydown({ key: 'Escape', target: {}, preventDefault() { prevented = true; } });
+
+  assert.equal(prevented, true, 'o keydown do Esc tem que ser cancelado');
+  assert.equal($('#drawer').open, true, 'o painel continua aberto até a resposta');
+  assert.equal($('#modal').open, true);
+  assert.match($('#modal').innerHTML, /Descartar alterações\?/);
+});
+
+test('Esc fecha o modal, menos durante um envio', () => {
+  const $ = installDom(async () => { throw new Error('rede desligada no teste'); });
+  resetState();
+  $('#modal').showModal();
+
+  app.state.sending = true;
+  app.handleKeydown({ key: 'Escape', target: {}, preventDefault() {} });
+  assert.equal($('#modal').open, true, 'durante o envio o modal não fecha');
+
+  app.state.sending = false;
+  app.handleKeydown({ key: 'Escape', target: {}, preventDefault() {} });
+  assert.equal($('#modal').open, false);
+});
+
 test('salvar sem dia marcado não chama a API e explica no painel', async () => {
   const { fetch, calls } = routedFetch({ 'GET /api/cron/preview': preview });
   const $ = installDom(fetch);

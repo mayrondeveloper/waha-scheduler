@@ -80,6 +80,19 @@ export function scheduleList({ schedules, messages, nextRuns = {}, timeZone, now
   return `<ul class="rows">${schedules.map((s) => scheduleRow(s, { messages, nextRuns, timeZone, now })).join('')}</ul>`;
 }
 
+// Bloco do formulário com título e, à direita, um complemento opcional (link
+// ou contador). É um grupo rotulado (role="group" + aria-labelledby), que o
+// leitor de tela trata como um fieldset, em vez de fieldset/legend: o
+// navegador desenha a legend fora da área de conteúdo, e o complemento
+// posicionado caía por cima do primeiro campo.
+function fieldGroup(id, label, aside, body) {
+  return `
+    <div class="field" role="group" aria-labelledby="${id}">
+      <div class="field-head"><span class="field-label" id="${id}">${label}</span>${aside}</div>
+      ${body}
+    </div>`;
+}
+
 // Um cron personalizado (editado à mão no arquivo) aparece cru e é mantido
 // como está: convertê-lo em dias e horário em silêncio mudaria quando o
 // agendamento dispara, num save que talvez só quisesse trocar a mensagem.
@@ -89,24 +102,19 @@ function whenSection(schedule, timezoneLabel) {
   const preview = `<p class="hint">${zone}<span id="preview" class="preview">—</span></p>`;
 
   if (!when) {
-    return `
-      <fieldset class="field">
-        <legend class="field-label">Quando</legend>
-        <p class="note">Este agendamento usa um cron personalizado, que não cabe em dias e horário. Ele é mantido como está.</p>
-        <input type="text" name="cron" value="${escape(schedule.cron)}" required autocomplete="off" aria-label="Expressão cron" />
-        ${preview}
-      </fieldset>`;
+    return fieldGroup('label-when', 'Quando', '', `
+      <p class="note">Este agendamento usa um cron personalizado, que não cabe em dias e horário. Ele é mantido como está.</p>
+      <input type="text" name="cron" value="${escape(schedule.cron)}" required autocomplete="off" aria-label="Expressão cron" />
+      ${preview}`);
   }
 
   const days = WEEKDAYS.map((d) => `
-          <label class="day">
-            <input type="checkbox" name="day" value="${escape(d.value)}" ${when.days.includes(d.value) ? 'checked' : ''} />
-            <span>${escape(d.label)}</span>
-          </label>`).join('');
+        <label class="day">
+          <input type="checkbox" name="day" value="${escape(d.value)}" ${when.days.includes(d.value) ? 'checked' : ''} />
+          <span>${escape(d.label)}</span>
+        </label>`).join('');
 
-  return `
-    <fieldset class="field">
-      <legend class="field-label">Quando</legend>
+  return fieldGroup('label-when', 'Quando', '', `
       <div class="days">${days}</div>
       <div class="when-row">
         <button type="button" class="link" data-action="days-weekdays">Dias úteis</button>
@@ -116,34 +124,26 @@ function whenSection(schedule, timezoneLabel) {
           <input type="time" name="time" value="${escape(when.time)}" required />
         </label>
       </div>
-      ${preview}
-    </fieldset>`;
+      ${preview}`);
 }
 
 function messageSection(schedule, messages, composing) {
   if (composing || messages.length === 0) {
     const pick = messages.length > 0
-      ? '<button type="button" class="link field-aside" data-action="pick-message">Escolher uma existente</button>'
+      ? '<button type="button" class="link" data-action="pick-message">Escolher uma existente</button>'
       : '';
-    return `
-      <fieldset class="field">
-        <legend class="field-label">Mensagem</legend>
-        ${pick}
-        ${messageEditor({ nameField: 'messageName', textField: 'messageText', name: schedule.name ?? '' })}
-      </fieldset>`;
+    return fieldGroup('label-message', 'Mensagem', pick,
+      messageEditor({ nameField: 'messageName', textField: 'messageText', name: schedule.name ?? '' }));
   }
 
   const selected = messages.find((m) => m.id === schedule.messageId) ?? messages[0];
   const options = messages
     .map((m) => `<option value="${escape(m.id)}" ${m.id === selected.id ? 'selected' : ''}>${escape(m.name)}</option>`)
     .join('');
-  return `
-    <fieldset class="field">
-      <legend class="field-label">Mensagem</legend>
-      <button type="button" class="link field-aside" data-action="compose-message">${icon('plus')} Escrever nova</button>
-      <select name="messageId" required aria-label="Mensagem">${options}</select>
-      <div class="chat"><div class="bubble" id="message-preview">${formatWhatsApp(selected.text)}</div></div>
-    </fieldset>`;
+  const compose = `<button type="button" class="link" data-action="compose-message">${icon('plus')} Escrever nova</button>`;
+  return fieldGroup('label-message', 'Mensagem', compose, `
+      <select name="messageId" required aria-labelledby="label-message">${options}</select>
+      <div class="chat"><div class="bubble" id="message-preview">${formatWhatsApp(selected.text)}</div></div>`);
 }
 
 function groupsSection(saved, groups, groupsError) {
@@ -153,12 +153,9 @@ function groupsSection(saved, groups, groupsError) {
     const note = groupsError
       ? 'A lista de grupos do WAHA não está disponível. Digite os ids separados por vírgula.'
       : 'Carregando a lista de grupos do WAHA. Enquanto isso, dá para digitar os ids separados por vírgula.';
-    return `
-      <fieldset class="field">
-        <legend class="field-label">Grupos</legend>
-        <p class="note">${note}</p>
-        <input type="text" id="groups-text" value="${escape(saved.join(','))}" placeholder="120363000000000000@g.us" autocomplete="off" aria-label="Ids dos grupos" />
-      </fieldset>`;
+    return fieldGroup('label-groups', 'Grupos', '', `
+      <p class="note">${note}</p>
+      <input type="text" id="groups-text" value="${escape(saved.join(','))}" placeholder="120363000000000000@g.us" autocomplete="off" aria-label="Ids dos grupos" />`);
   }
 
   // Um grupo já salvo que o WAHA não lista (o bot saiu do grupo, a sessão
@@ -174,16 +171,13 @@ function groupsSection(saved, groups, groupsError) {
           ${notFound ? '<small class="warn">não encontrado na lista atual do WAHA</small>' : `<small class="group-id">${escape(id)}</small>`}
         </label>`;
 
-  return `
-    <fieldset class="field">
-      <legend class="field-label">Grupos</legend>
-      <span class="field-aside" id="groups-count">${selectedCountLabel(saved.length)}</span>
+  const count = `<span class="field-count" id="groups-count">${selectedCountLabel(saved.length)}</span>`;
+  return fieldGroup('label-groups', 'Grupos', count, `
       <input type="search" class="group-search" data-role="group-search" placeholder="Buscar grupo" aria-label="Buscar grupo" autocomplete="off" />
       <div class="group-list">
         ${missing.map((id) => option(id, id, true)).join('')}
         ${groups.map((g) => option(g.id, g.name, false)).join('')}
-      </div>
-    </fieldset>`;
+      </div>`);
 }
 
 /**
