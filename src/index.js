@@ -7,19 +7,48 @@ import { config } from './config.js';
 import { loadSchedules } from './schedules.js';
 import { broadcast } from './broadcast.js';
 import { info, warn, error, success } from './logger.js';
+import { statusPathFor, writeStatus, removeStatus, HEARTBEAT_MS } from './scheduler-status.js';
 
 const RELOAD_DEBOUNCE_MS = 200;
 
 /**
  * Registra os agendamentos de um arquivo e permite recarregá-los.
  * Na recarga, uma configuração inválida preserva a anterior — diferente do
- * boot, onde ela aborta o processo.
- * @param {{schedulesPath?: string, cfg?: object}} [options]
+ * boot, onde ela aborta o processo. Enquanto roda, grava o arquivo de status
+ * que a tela lê para saber se os envios vão sair.
+ * @param {{schedulesPath?: string, cfg?: object, statusPath?: string, heartbeatMs?: number}} [options]
  * @returns {{reload: () => boolean, stop: () => void, activeNames: string[]}}
  */
 export function startScheduler(options = {}) {
-  const { schedulesPath = config.schedulesPath, cfg = config } = options;
+  const {
+    schedulesPath = config.schedulesPath,
+    cfg = config,
+    statusPath = statusPathFor(schedulesPath),
+    heartbeatMs = HEARTBEAT_MS,
+  } = options;
   let tasks = [];
+  const startedAt = new Date().toISOString();
+  let reloadError = null;
+  let statusFailing = false;
+
+  // Status é informação para a tela, nunca motivo para derrubar o
+  // agendador: a falha ao gravar é logada uma vez e os disparos seguem.
+  function beat() {
+    try {
+      writeStatus(statusPath, {
+        pid: process.pid,
+        startedAt,
+        beatAt: new Date().toISOString(),
+        active: tasks.map((t) => t.name),
+        reloadError,
+      });
+      if (statusFailing) info(`Status do agendador voltou a ser gravado em ${statusPath}.`);
+      statusFailing = false;
+    } catch (err) {
+      if (!statusFailing) error(`${err.message}. Os agendamentos continuam disparando.`);
+      statusFailing = true;
+    }
+  }
 
   function register(schedules) {
     // Monta a nova geração de tasks ANTES de tocar na anterior: se algo
@@ -76,6 +105,11 @@ export function startScheduler(options = {}) {
 
   // Primeira carga: deixa o erro subir, para o boot poder abortar.
   register(loadSchedules(schedulesPath).schedules);
+  beat();
+  // unref: o timer sozinho não mantém o processo vivo — quem mantém são os
+  // crons e o watcher do arquivo.
+  const heartbeat = setInterval(beat, heartbeatMs);
+  heartbeat.unref();
 
   return {
     reload() {
@@ -84,14 +118,24 @@ export function startScheduler(options = {}) {
         register(loaded.schedules);
       } catch (err) {
         error(`Recarga ignorada, mantendo a configuração anterior: ${err.message}`);
+        reloadError = err.message;
+        beat();
         return false;
       }
+      reloadError = null;
+      beat();
       success(`Configuração recarregada: ${tasks.length} agendamento(s) ativo(s).`);
       return true;
     },
     stop() {
+      clearInterval(heartbeat);
       for (const { task } of tasks) task.destroy();
       tasks = [];
+      try {
+        removeStatus(statusPath);
+      } catch (err) {
+        error(err.message);
+      }
     },
     get activeNames() {
       return tasks.map((t) => t.name);
@@ -152,6 +196,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   if (scheduler.activeNames.length === 0) {
     warn('Nenhum agendamento ativo. Habilite ao menos um em "schedules" para manter o serviço.');
+    scheduler.stop();
     process.exit(0);
   }
 
