@@ -5,6 +5,10 @@ data/
 # reais: ele deixou de ser rastreado (virou schedules.example.json) e o
 # repositório é público — sem esta linha, um `git add .` publicaria os ids.
 /schedules.json
+# Status que o agendador grava ao lado do arquivo de agendamentos — em data/
+# ele já fica de fora, mas SCHEDULES_PATH pode apontar para outra pasta.
+scheduler-status.json
+scheduler-status.json.tmp
 .env
 .DS_Store
 npm-debug.log*

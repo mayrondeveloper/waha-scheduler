@@ -26,12 +26,26 @@ const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
 // caminho absoluto do servidor na resposta. Nunca acrescente 500 aqui.
 const DELIBERATE_5XX = new Set([502]);
 
-// Lista fixa: o caminho servido nunca é montado a partir da URL.
+// Lista fixa: o caminho servido nunca é montado a partir da URL. Todo módulo
+// que a tela importa precisa estar aqui (o teste de estáticos confere).
+const JS = 'text/javascript; charset=utf-8';
 const STATIC_FILES = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/index.html': ['index.html', 'text/html; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
-  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+  '/main.js': ['main.js', JS],
+  '/app.js': ['app.js', JS],
+  '/api.js': ['api.js', JS],
+  '/html.js': ['html.js', JS],
+  '/cron.js': ['cron.js', JS],
+  '/dates.js': ['dates.js', JS],
+  '/whatsapp.js': ['whatsapp.js', JS],
+  '/emoji.js': ['emoji.js', JS],
+  '/history.js': ['history.js', JS],
+  '/status-view.js': ['status-view.js', JS],
+  '/schedules-view.js': ['schedules-view.js', JS],
+  '/messages-view.js': ['messages-view.js', JS],
+  '/history-view.js': ['history-view.js', JS],
 };
 
 // Descreve qualquer valor lançado como texto útil para log — inclusive

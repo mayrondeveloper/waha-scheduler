@@ -3,6 +3,9 @@
 Data: 2026-09-06
 Status: aprovado para planejamento
 
+> A seção "A tela" foi substituída por `2026-09-11-frontend-redesign-design.md`.
+> O resto deste documento continua valendo.
+
 ## Contexto
 
 O waha-scheduler hoje é operado por dois CLIs (`list-groups`, `send-now`) e um
