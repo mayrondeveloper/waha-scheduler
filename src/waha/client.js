@@ -97,3 +97,43 @@ export async function sendText(chatId, text, cfg = config) {
 
   return res.json().catch(() => ({}));
 }
+
+// Áudio vai por sendFile de propósito: sendVoice exige OPUS em OGG e uma
+// conversão dentro do WAHA; como arquivo de áudio, chega tocável no grupo.
+const MEDIA_ENDPOINTS = { image: 'sendImage', video: 'sendVideo', audio: 'sendFile', document: 'sendFile' };
+
+/**
+ * Envia um anexo (imagem, vídeo, áudio ou arquivo) para um chat, em base64.
+ * @param {string} chatId Id do destino.
+ * @param {{mimetype: string, filename: string, data: string}} file data em base64.
+ * @param {{kind: 'image'|'video'|'audio'|'document', caption?: string}} [options]
+ *   kind decide o endpoint; caption é a legenda (só vai quando não é vazia).
+ * @param {object} [cfg] Configuração a usar (default: config global).
+ * @returns {Promise<unknown>} Corpo da resposta do WAHA.
+ */
+export async function sendMedia(chatId, file, { kind, caption } = {}, cfg = config) {
+  const url = `${cfg.wahaUrl}/api/${MEDIA_ENDPOINTS[kind] ?? 'sendFile'}`;
+  const payload = {
+    session: cfg.session,
+    chatId,
+    file: { mimetype: file.mimetype, filename: file.filename, data: file.data },
+  };
+  if (caption) payload.caption = caption;
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: headers(cfg),
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    throw new Error(`Falha de conexão ao enviar anexo para ${chatId}: ${err.message}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(`Erro ${res.status} ao enviar anexo para ${chatId}: ${await readBody(res)}`);
+  }
+
+  return res.json().catch(() => ({}));
+}

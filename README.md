@@ -113,6 +113,15 @@ citação com `>`) e emojis, pela barra do editor. O texto é guardado e enviado
 cru, com os marcadores; a prévia ao lado mostra como ele chega no grupo. Um
 agendamento novo pode ter a mensagem escrita ali mesmo, em "Escrever nova".
 
+Cada mensagem pode levar **um anexo**: imagem (JPEG, PNG ou WebP), vídeo MP4,
+áudio ou qualquer outro arquivo (PDF, planilha, GIF...), até 16 MB. O clipe na
+barra do editor abre o seletor; o anexo aparece numa tira abaixo do texto e na
+prévia do balão, e sai da mensagem pelo "Remover". No envio, o texto vai como
+legenda do anexo (imagem, vídeo e arquivo aceitam legenda de até 1024
+caracteres); quando não cabe, ou quando o anexo é áudio, o anexo sai primeiro
+e o texto logo em seguida. O arquivo fica em `data/media/`, ao lado do arquivo
+de agendamentos, e é apagado quando a mensagem perde o anexo ou é excluída.
+
 A aparência segue o design system do projeto, em
 `docs/design/waha-scheduler-design-system.html` (um arquivo só, abre direto no
 navegador): tema escuro, sem variante clara; fontes Geist e Geist Mono
@@ -184,7 +193,14 @@ propague para agendamentos já salvos pela tela.
     {
       "id": "msg-a1b2c3d4",
       "name": "bom-dia",
-      "text": "Bom dia! Segue o resumo da semana."
+      "text": "Bom dia! Segue o resumo da semana.",
+      "media": {
+        "id": "med-9f8e7d6c",
+        "filename": "capa.png",
+        "mimetype": "image/png",
+        "size": 48213,
+        "kind": "image"
+      }
     }
   ],
   "schedules": [
@@ -201,7 +217,12 @@ propague para agendamentos já salvos pela tela.
 ```
 
 - `messages` — biblioteca de mensagens reutilizáveis; cada uma tem `id`
-  (gerado automaticamente quando ausente), `name` e `text`.
+  (gerado automaticamente quando ausente), `name`, `text` e, opcionalmente,
+  `media`: o anexo, com `id`, `filename`, `mimetype`, `size` (bytes) e `kind`
+  (`image`, `video`, `audio` ou `document`). O arquivo em si fica em
+  `data/media/<id>.<extensão>`; a tela grava e apaga esse arquivo junto com a
+  mensagem. Um anexo referenciado sem arquivo faz o envio daquela mensagem
+  falhar com erro apontando o caminho esperado.
 - `id` — gerado no servidor quando ausente; identifica agendamento ou mensagem
   de forma estável entre gravações.
 - `name` — obrigatório e único (entre agendamentos, e separadamente entre
@@ -234,7 +255,8 @@ Uma linha JSON por tentativa em `LOG_PATH`:
 ```
 
 `status` é `sent` ou `error`; entradas com erro trazem o campo `error` com o
-contexto da falha.
+contexto da falha. Quando a mensagem tem anexo, a linha traz também
+`media` com `kind` e `filename`.
 
 ## Desenvolvimento
 
@@ -247,6 +269,10 @@ node harness/run.js phase1  # valida uma fase específica
 npm run mock                # sobe só o mock do WAHA em :3999
 npm run dev                 # sobe o mock e a tela, já apontada para ele
 ```
+
+O mock só responde `sendText`: uma mensagem com anexo enviada contra ele falha
+com `Erro 404 ao enviar anexo para ...` e aparece assim no histórico. Isso é o
+esperado — o envio de mídia só existe contra um WAHA de verdade.
 
 ## Estrutura
 

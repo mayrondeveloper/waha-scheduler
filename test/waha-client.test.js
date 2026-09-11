@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startMockWaha, FAIL_GROUP_ID } from '../harness/mock-waha.js';
-import { extractGroupId, normalizeGroup, listGroups, sendText } from '../src/waha/client.js';
+import { extractGroupId, normalizeGroup, listGroups, sendText, sendMedia } from '../src/waha/client.js';
 
 const PORT = 3997;
 const cfg = {
@@ -67,4 +67,47 @@ test('sendText entrega a mensagem e lança erro com contexto quando o WAHA falha
 test('erro de conexão vira mensagem com contexto', async () => {
   const offline = { wahaUrl: 'http://localhost:3996', session: 'default', apiKey: '' };
   await assert.rejects(() => listGroups(offline), /Falha de conexão ao listar grupos/);
+});
+
+// O mock do harness não tem os endpoints de mídia (e não pode ser alterado):
+// aqui o fetch é falso, e o que se prova é o endpoint e o corpo por tipo.
+const FILE = { mimetype: 'image/png', filename: 'a.png', data: 'AAAA' };
+
+function withFakeFetch(t, impl) {
+  const original = globalThis.fetch;
+  globalThis.fetch = impl;
+  t.after(() => { globalThis.fetch = original; });
+}
+
+test('sendMedia escolhe o endpoint pelo tipo e envia o arquivo em base64, com legenda quando há', async (t) => {
+  const seen = [];
+  withFakeFetch(t, async (url, init) => {
+    seen.push({ url, body: JSON.parse(init.body), headers: init.headers });
+    return { ok: true, status: 201, json: async () => ({ id: 'x' }) };
+  });
+  const withKey = { ...cfg, apiKey: 'segredo' };
+
+  await sendMedia('1@g.us', FILE, { kind: 'image', caption: 'legenda' }, withKey);
+  await sendMedia('1@g.us', { ...FILE, mimetype: 'video/mp4' }, { kind: 'video' }, withKey);
+  await sendMedia('1@g.us', { ...FILE, mimetype: 'application/pdf' }, { kind: 'document', caption: '' }, withKey);
+  await sendMedia('1@g.us', { ...FILE, mimetype: 'audio/mpeg' }, { kind: 'audio' }, withKey);
+
+  assert.deepEqual(seen.map((s) => s.url), [
+    `${cfg.wahaUrl}/api/sendImage`,
+    `${cfg.wahaUrl}/api/sendVideo`,
+    `${cfg.wahaUrl}/api/sendFile`,
+    `${cfg.wahaUrl}/api/sendFile`,
+  ]);
+  assert.deepEqual(seen[0].body, { session: 'default', chatId: '1@g.us', file: FILE, caption: 'legenda' });
+  assert.equal('caption' in seen[1].body, false, 'sem legenda, o campo não vai');
+  assert.equal('caption' in seen[2].body, false, 'legenda vazia também não vai');
+  assert.equal(seen[0].headers['X-Api-Key'], 'segredo');
+});
+
+test('sendMedia lança erro com contexto no status e na conexão', async (t) => {
+  withFakeFetch(t, async () => ({ ok: false, status: 500, text: async () => 'boom' }));
+  await assert.rejects(() => sendMedia('1@g.us', FILE, { kind: 'image' }, cfg), /Erro 500 ao enviar anexo para 1@g\.us: boom/);
+
+  withFakeFetch(t, async () => { throw new Error('ECONNREFUSED'); });
+  await assert.rejects(() => sendMedia('1@g.us', FILE, { kind: 'image' }, cfg), /Falha de conexão ao enviar anexo para 1@g\.us/);
 });

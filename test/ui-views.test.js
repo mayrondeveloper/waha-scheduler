@@ -8,6 +8,7 @@ import { messageList, messageEditor, emojiPanel, messagesSubtitle } from '../pub
 import { historyView, historySubtitle } from '../public/history-view.js';
 import { groupDispatches, lastDispatchByName } from '../public/history.js';
 import { pageHeader } from '../public/html.js';
+import { mediaPreview, mediaChip, formatBytes, validateFile } from '../public/media.js';
 import { fakeForm } from './fake-dom.js';
 
 const KNOWN_GROUP = '111111111111111111@g.us';
@@ -290,6 +291,49 @@ test('histórico filtra por agendamento e por falha', () => {
   assert.match(onlyFailed, /row-title-text">resumo/);
   assert.doesNotMatch(onlyFailed, /row-title-text">ofertas/);
   assert.doesNotMatch(view({ name: 'ofertas', onlyFailed: false }), /row-title-text">resumo/);
+});
+
+// ---------- Anexos ----------
+
+const IMAGE = { id: 'med-1', filename: 'foto.png', mimetype: 'image/png', size: 183420, kind: 'image' };
+
+test('editor com anexo mostra a tira com nome, tamanho e remover, e a imagem no balão', () => {
+  const html = messageEditor({ nameField: 'name', textField: 'text', text: 'oi', media: IMAGE, mediaSrc: '/api/media/med-1' });
+  assert.match(html, /data-format="attach"/, 'botão Anexar na barra');
+  assert.match(html, /type="file"/);
+  assert.match(html, /foto\.png/);
+  assert.match(html, /179 KB/);
+  assert.match(html, /data-action="remove-media"/);
+  assert.match(html, /<img[^>]+src="\/api\/media\/med-1"/);
+  assert.doesNotMatch(messageEditor({ nameField: 'name', textField: 'text' }), /remove-media/, 'sem anexo, sem tira');
+});
+
+test('prévia do anexo por tipo, sempre com o nome escapado', () => {
+  assert.match(mediaPreview({ ...IMAGE, kind: 'video', mimetype: 'video/mp4' }, 'blob:v'), /<video[^>]+src="blob:v"/);
+  assert.match(mediaPreview({ ...IMAGE, kind: 'audio', mimetype: 'audio/mpeg' }, 'blob:a'), /<audio[^>]+src="blob:a"/);
+  const doc = mediaPreview({ ...IMAGE, filename: '<b>x</b>.pdf', kind: 'document', mimetype: 'application/pdf' }, '/api/media/med-1');
+  assert.match(doc, /media-doc/);
+  assert.match(doc, /&lt;b&gt;x&lt;\/b&gt;\.pdf/);
+  assert.doesNotMatch(doc, /<b>/);
+});
+
+test('chip do anexo, tamanhos por extenso e validação do arquivo', () => {
+  assert.match(mediaChip(IMAGE), /media-chip/);
+  assert.match(mediaChip(IMAGE), /foto\.png/);
+  assert.equal(formatBytes(512), '512 bytes');
+  assert.equal(formatBytes(183420), '179 KB');
+  assert.equal(formatBytes(1_258_291), '1,2 MB');
+  assert.equal(validateFile({ name: 'a.png', size: 10 }), null);
+  assert.match(validateFile({ name: 'grande.mp4', size: 17 * 1024 * 1024 }), /16 MB/);
+});
+
+test('a lista de mensagens, a seleção no agendamento e o modal de envio mostram o anexo', () => {
+  const withMedia = [{ id: 'msg-a', name: 'Foto', text: 'Olá', media: IMAGE }];
+  assert.match(messageList({ messages: withMedia, schedules: [] }), /media-chip/);
+  const formHtml = scheduleForm({ schedule: { id: 'sch-a', name: 'x', cron: '0 9 * * 1', messageId: 'msg-a', groups: [] }, messages: withMedia, groups: [] });
+  assert.match(formHtml, /src="\/api\/media\/med-1"/, 'a prévia da mensagem escolhida traz a imagem');
+  const confirm = sendConfirm({ schedule: { id: 'sch-a', name: 'x', groups: [KNOWN_GROUP] }, message: withMedia[0], groupName: (id) => id });
+  assert.match(confirm, /src="\/api\/media\/med-1"/);
 });
 
 test('histórico vazio explica de onde vêm os envios', () => {

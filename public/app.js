@@ -13,13 +13,13 @@ import {
   scheduleList, scheduleForm, formCron, formGroups, searchKey, selectedCountLabel, sendConfirm, sendResult,
   schedulesSubtitle,
 } from './schedules-view.js';
-import { messageList, messageForm, emojiPanel, messagesSubtitle } from './messages-view.js';
+import { messageList, messageForm, emojiPanel, messagesSubtitle, bubbleContent } from './messages-view.js';
 import { historyView, historySubtitle } from './history-view.js';
+import { classifyMedia, validateFile, mediaStrip } from './media.js';
 
 const STATUS_POLL_MS = 15_000;
 const LOG_LIMIT = 500;
 const TABS = ['schedules', 'messages', 'history'];
-const EMPTY_PREVIEW = '<span class="muted">A prévia aparece aqui.</span>';
 
 /** Estado da tela. Exportado para os testes. */
 export const state = {
@@ -49,6 +49,7 @@ const now = () => Date.now() + state.clockOffset;
 const timeZone = () => state.status?.timezone;
 const groupName = (id) => state.groups.find((g) => g.id === id)?.name ?? id;
 const fieldValue = (form, name) => form.querySelector(`[name="${name}"]`)?.value ?? '';
+const mediaSrcFor = (media) => (media ? `/api/media/${encodeURIComponent(media.id)}` : '');
 
 // ---------- Carga ----------
 
@@ -242,7 +243,30 @@ function snapshotOf(form) {
 
 function isDirty() {
   const form = drawer().querySelector('form');
-  return Boolean(form && state.editing && snapshotOf(form) !== state.editing.snapshot);
+  return Boolean(form && state.editing && (state.editing.mediaDirty || snapshotOf(form) !== state.editing.snapshot));
+}
+
+// O anexo em edição: o pendente (escolhido agora, ainda não salvo) vence o
+// atual (já gravado, servido pelo servidor).
+function editingMedia() {
+  const m = state.editing?.media;
+  if (m?.pending) return { media: m.pending, src: m.pending.src };
+  if (m?.current) return { media: m.current, src: mediaSrcFor(m.current) };
+  return { media: null, src: '' };
+}
+
+// O que vai no corpo da mensagem: o arquivo novo em base64, a referência ao
+// atual, ou nada.
+function mediaPayload() {
+  const m = state.editing?.media;
+  if (m?.pending) return { filename: m.pending.filename, mimetype: m.pending.mimetype, data: m.pending.data };
+  if (m?.current) return { id: m.current.id };
+  return null;
+}
+
+function releasePendingMedia() {
+  const src = state.editing?.media?.pending?.src;
+  if (src) URL.revokeObjectURL(src);
 }
 
 function showDrawer(html, { fresh }) {
@@ -253,6 +277,7 @@ function showDrawer(html, { fresh }) {
 }
 
 function renderScheduleDrawer({ fresh = false } = {}) {
+  const { media, src } = editingMedia();
   showDrawer(scheduleForm({
     schedule: state.editing.data,
     messages: state.messages,
@@ -260,6 +285,8 @@ function renderScheduleDrawer({ fresh = false } = {}) {
     groupsError: state.groupsError,
     composing: state.editing.composing,
     timezoneLabel: state.status?.timezoneLabel,
+    media,
+    mediaSrc: src,
   }), { fresh });
   updatePreview(state.editing.data.cron ?? '');
 }
@@ -272,7 +299,9 @@ export function openScheduleEditor(id) {
   const data = id
     ? structuredClone(state.schedules.find((s) => s.id === id))
     : { name: '', cron: '', messageId: state.messages[0]?.id, groups: [], enabled: true };
-  state.editing = { type: 'schedule', data, composing: false, snapshot: '' };
+  state.editing = {
+    type: 'schedule', data, composing: false, snapshot: '', media: { current: null, pending: null }, mediaDirty: false,
+  };
   renderScheduleDrawer({ fresh: true });
 }
 
@@ -282,7 +311,9 @@ export function openScheduleEditor(id) {
  */
 export function openMessageEditor(id) {
   const data = id ? structuredClone(state.messages.find((m) => m.id === id)) : { name: '', text: '' };
-  state.editing = { type: 'message', data, composing: false, snapshot: '' };
+  state.editing = {
+    type: 'message', data, composing: false, snapshot: '', media: { current: data.media ?? null, pending: null }, mediaDirty: false,
+  };
   showDrawer(messageForm({ message: data }), { fresh: true });
 }
 
@@ -300,6 +331,7 @@ async function requestCloseDrawer() {
 }
 
 function closeDrawer() {
+  releasePendingMedia();
   state.editing = null;
   const d = drawer();
   if (d.open) d.close();
@@ -382,14 +414,65 @@ function updateGroupCount(form) {
 function updateMessagePreview(select) {
   const message = state.messages.find((m) => m.id === select.value);
   const preview = select.form.querySelector('#message-preview');
-  if (preview) preview.innerHTML = message ? formatWhatsApp(message.text) : '';
+  if (preview) {
+    preview.innerHTML = message
+      ? bubbleContent({ text: message.text, media: message.media ?? null, mediaSrc: mediaSrcFor(message.media) })
+      : '';
+  }
 }
 
 // ---------- Editor de mensagem ----------
 
 function updateEditorPreview(textarea) {
   const preview = textarea.closest('.editor').querySelector('[data-role="editor-preview"]');
-  preview.innerHTML = textarea.value.trim() ? formatWhatsApp(textarea.value) : EMPTY_PREVIEW;
+  const { media, src } = editingMedia();
+  preview.innerHTML = bubbleContent({ text: textarea.value, media, mediaSrc: src });
+}
+
+// Redesenha a tira e o balão depois de anexar ou remover, sem tocar no texto.
+function refreshEditorMedia() {
+  const d = drawer();
+  const { media, src } = editingMedia();
+  const strip = d.querySelector('[data-role="media-strip"]');
+  if (strip) strip.innerHTML = media ? mediaStrip(media, src) : '';
+  const preview = d.querySelector('[data-role="editor-preview"]');
+  const text = d.querySelector('textarea[data-editor]')?.value ?? '';
+  if (preview) preview.innerHTML = bubbleContent({ text, media, mediaSrc: src });
+}
+
+// Lê o arquivo escolhido em base64 (é assim que ele vai no corpo da mensagem)
+// e guarda uma URL local para a prévia. O upload só acontece no salvar.
+function attachFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  const problem = validateFile(file);
+  input.value = '';
+  if (problem) {
+    showFormError(drawer(), problem);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onerror = () => showFormError(drawer(), `Não foi possível ler "${file.name}".`);
+  reader.onload = () => {
+    if (!state.editing?.media) return;
+    releasePendingMedia();
+    const mimetype = file.type || 'application/octet-stream';
+    state.editing.media = {
+      current: null,
+      pending: {
+        filename: file.name,
+        mimetype,
+        size: file.size,
+        kind: classifyMedia(mimetype),
+        data: String(reader.result).split(',')[1] ?? '',
+        src: URL.createObjectURL(file),
+      },
+    };
+    state.editing.mediaDirty = true;
+    hideFormError(drawer());
+    refreshEditorMedia();
+  };
+  reader.readAsDataURL(file);
 }
 
 // Troca o texto do campo mantendo o desfazer (⌘Z) do navegador quando dá:
@@ -406,6 +489,10 @@ function applyFormat(button) {
   const editor = button.closest('.editor');
   if (button.dataset.format === 'emoji') {
     toggleEmojiPanel(editor);
+    return;
+  }
+  if (button.dataset.format === 'attach') {
+    editor.querySelector('[data-role="media-file"]').click();
     return;
   }
   const textarea = editor.querySelector('textarea[data-editor]');
@@ -601,10 +688,19 @@ async function saveSchedule(form) {
     // "Escrever nova": grava a mensagem primeiro. Se o agendamento for
     // recusado depois, o painel volta com ela já escolhida, e tentar de novo
     // não cria outra.
+    const media = mediaPayload();
     const created = await api('/messages', {
       method: 'POST',
-      body: JSON.stringify({ name: fieldValue(form, 'messageName'), text: fieldValue(form, 'messageText') }),
+      body: JSON.stringify({
+        name: fieldValue(form, 'messageName'),
+        text: fieldValue(form, 'messageText'),
+        ...(media && { media }),
+      }),
     });
+    // A mensagem, e o anexo dela, já estão gravados: a partir daqui o painel
+    // mostra o anexo servido pelo servidor, não o pendente.
+    releasePendingMedia();
+    editing.media = { current: null, pending: null };
     state.messages = [...state.messages, created];
     editing.data.messageId = created.id;
     editing.composing = false;
@@ -626,7 +722,8 @@ async function saveSchedule(form) {
 }
 
 async function saveMessage(form) {
-  const payload = { name: fieldValue(form, 'name'), text: fieldValue(form, 'text') };
+  const media = mediaPayload();
+  const payload = { name: fieldValue(form, 'name'), text: fieldValue(form, 'text'), ...(media && { media }) };
   const id = state.editing.data.id;
   await api(id ? `/messages/${encodeURIComponent(id)}` : '/messages', {
     method: id ? 'PUT' : 'POST',
@@ -723,6 +820,13 @@ export function handleClick(evt) {
       renderTab();
     },
     'dismiss-toast': () => el.closest('.toast')?.remove(),
+    'remove-media': () => {
+      if (!state.editing?.media) return;
+      releasePendingMedia();
+      state.editing.media = { current: null, pending: null };
+      state.editing.mediaDirty = true;
+      refreshEditorMedia();
+    },
   };
   actions[action]?.();
 }
@@ -751,6 +855,8 @@ function handleChange(evt) {
   } else if (target.dataset?.role === 'history-name') {
     state.historyFilter.name = target.value;
     renderTab();
+  } else if (target.dataset?.role === 'media-file') {
+    attachFile(target);
   }
 }
 

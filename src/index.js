@@ -8,6 +8,7 @@ import { loadSchedules } from './schedules.js';
 import { broadcast } from './broadcast.js';
 import { info, warn, error, success } from './logger.js';
 import { statusPathFor, writeStatus, removeStatus, HEARTBEAT_MS } from './scheduler-status.js';
+import { mediaDirFor, mediaPath } from './media.js';
 
 const RELOAD_DEBOUNCE_MS = 200;
 
@@ -71,9 +72,15 @@ export function startScheduler(options = {}) {
           async () => {
             info(`Disparando agendamento "${item.name}" para ${item.groups.length} grupo(s).`);
             try {
+              // O anexo é lido do disco na hora do disparo, pelo caminho que
+              // a tela gravou ao lado do arquivo de agendamentos.
+              const media = item.media
+                ? { ...item.media, path: mediaPath(mediaDirFor(schedulesPath), item.media) }
+                : null;
               const { sent, failed } = await broadcast(item.message, item.groups, {
                 cfg,
                 label: item.name,
+                media,
               });
               success(`Agendamento "${item.name}": ${sent} enviada(s), ${failed} falha(s).`);
             } catch (err) {
