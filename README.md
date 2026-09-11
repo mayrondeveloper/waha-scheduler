@@ -95,6 +95,11 @@ Abre em `http://127.0.0.1:3010`. Permite criar, editar, ligar/desligar e
 excluir agendamentos e mensagens, escolher grupos por nome, disparar um envio
 na hora e consultar o histórico.
 
+Em vez de cron, o formulário pede os dias da semana e o horário, e monta o
+cron sozinho (Seg, Qua e Sex às 09:00 viram `0 9 * * 1,3,5`). Um cron editado
+à mão que não cabe nesse formato aparece cru no formulário e é mantido como
+está ao salvar.
+
 A tela escuta **apenas em localhost** — não é alcançável pela rede local nem
 pela internet, e por isso não tem senha. Não existe variável de ambiente para
 mudar isso: o host é sempre `127.0.0.1`, sem escotilha por env (não há

@@ -175,11 +175,20 @@ lock entre processos, e não é necessário — a UI é a única escritora por d
 
 Página única, três áreas, sem build step e sem framework.
 
-**Agendamentos** — lista com nome, cron, mensagem vinculada, quantidade de
-grupos, toggle de ativo e as ações editar / excluir / disparar agora. O
-formulário exibe os **próximos 3 disparos** conforme o cron é digitado, usando
-`getNextRuns()` do node-cron (verificado: disponível na v4). Os grupos vêm de
-`GET /api/groups`, exibidos por nome.
+**Agendamentos** — lista com nome, quando dispara ("Seg, Qua e Sex às 09:00",
+"Todo dia às 09:00"), mensagem vinculada, quantidade de grupos, toggle de ativo
+e as ações editar / excluir / disparar agora. O formulário não pede cron: pede
+os **dias da semana** (a semana começa na segunda) e o **horário**, e monta o
+cron a partir deles (`0 9 * * 1,3,5`; todos os dias viram `*`). O arquivo e o
+agendador continuam falando só cron. O horário vale no fuso de `TIMEZONE`. O
+formulário exibe os **próximos 3 disparos** assim que abre e a cada mudança
+nos dias ou no horário, usando `getNextRuns()` do node-cron (verificado:
+disponível na v4). Os grupos vêm de `GET /api/groups`, exibidos por nome.
+
+Um cron que não cabe em dias e horário — só o formato exato
+`minuto hora * * dias` cabe, com faixas como `1-5` e o domingo como `0` ou `7` —
+aparece cru no formulário, com um aviso, e salvar sem mexer o mantém como está.
+Convertê-lo em silêncio mudaria quando o agendamento dispara.
 
 **Mensagens** — CRUD, mostrando em cada mensagem quais agendamentos a usam.
 
@@ -197,6 +206,8 @@ ele envia mensagem de verdade no WhatsApp.
 | `messageId` apontando para mensagem inexistente | Erro de validação, nomeando o agendamento |
 | Nome de agendamento duplicado | 400, com a mensagem apontando o nome |
 | Cron válido mas que nunca dispara | Aceito; a tela mostra "nenhum disparo previsto" no preview |
+| Cron editado à mão que não cabe em dias e horário (`*/15 * * * *`) | O formulário mostra o cron cru, com aviso; salvar sem mexer o mantém. A lista mostra o cron em vez da descrição |
+| Nenhum dia da semana marcado | A tela recusa o save com "Selecione ao menos um dia da semana e o horário." |
 | Dois agendamentos para o mesmo grupo no mesmo minuto | Permitido; cada um respeita seu próprio delay entre grupos |
 | Arquivo editado à mão enquanto a tela está aberta | A UI relê o arquivo a cada requisição, então a próxima ação já parte do estado novo. Salvar na tela com um formulário aberto de antes sobrescreve a edição manual — a tela não faz merge |
 
