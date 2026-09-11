@@ -127,6 +127,38 @@ test('serve as fontes embutidas como font/woff2', async (t) => {
   }
 });
 
+// O anexo vai em base64 no corpo da mensagem: só as rotas de mensagem
+// aceitam corpo grande. Nas outras, o limite de 1 MB continua.
+test('corpo de 2 MB passa em /api/messages e leva 413 nas outras rotas', async (t) => {
+  const call = await boot(t, newStore(), testRoutes);
+  const big = 'A'.repeat(2_000_000);
+
+  // Numa rota comum, pouco acima de 1 MB já é 413. Vai por socket cru porque
+  // o servidor derruba a conexão sem ler tudo, e o fetch reporta isso como
+  // erro de rede em vez de entregar a resposta. (Bem mais que o limite, como
+  // os 2 MB, deixa tantos bytes por ler que o RST chega antes do 413.)
+  const echoStatus = await new Promise((resolve) => {
+    const body = Buffer.from(JSON.stringify({ big: 'A'.repeat(1_100_000) }));
+    const req = httpRequest({
+      host: '127.0.0.1', port: call.port, method: 'POST', path: '/api/echo',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
+    });
+    req.on('response', (res) => { res.resume(); resolve(res.statusCode); });
+    req.on('error', () => {});
+    req.end(body);
+    setTimeout(() => resolve(undefined), 3000);
+  });
+  assert.equal(echoStatus, 413);
+
+  const message = await call('/api/messages', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Grande', text: 'x', media: { filename: 'a.bin', mimetype: 'application/octet-stream', data: big } }),
+  });
+  const created = await message.json();
+  assert.equal(message.status, 201, JSON.stringify(created));
+  assert.equal(created.media.size, 1_500_000);
+});
+
 test('loadConfig não expõe mais uiHost (UI_HOST não é lido)', () => {
   const cfg = loadConfig({ UI_HOST: '0.0.0.0', UI_PORT: '0' });
   assert.equal('uiHost' in cfg, false, 'uiHost não deve mais existir na config');

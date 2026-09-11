@@ -8,6 +8,7 @@ import { checkCron } from '../../schedules.js';
 import { listGroups } from '../../waha/client.js';
 import { broadcast } from '../../broadcast.js';
 import { statusPathFor, readStatus, schedulerState } from '../../scheduler-status.js';
+import { mediaDirFor, mediaPath } from '../../media.js';
 import { error } from '../../logger.js';
 
 function httpError(status, message) {
@@ -90,9 +91,13 @@ export const actionRoutes = {
     const message = store.messages.find((m) => m.id === schedule.messageId);
     if (!message) throw httpError(404, `Mensagem "${schedule.messageId}" não encontrada.`);
 
+    const media = message.media
+      ? { ...message.media, path: mediaPath(mediaDirFor(schedulesPath), message.media) }
+      : null;
     const { sent, failed, results } = await broadcast(message.text, schedule.groups, {
       cfg,
       label: `${schedule.name} (manual)`,
+      media,
     });
 
     return { body: { sent, failed, results } };

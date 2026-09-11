@@ -5,6 +5,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { schedule as scheduleCron, validate as isValidCron } from 'node-cron';
 import { assertTimezone, config } from './config.js';
 import { normalizeGroups } from './broadcast.js';
+import { MEDIA_KINDS } from './media.js';
 
 function fail(message) {
   throw new Error(message);
@@ -59,11 +60,24 @@ export function checkCron(expr, timezone = config.timezone) {
   return { valid: true };
 }
 
+// Metadados do anexo, como ficam no arquivo. O conteúdo em si está em
+// data/media; aqui só se confere que a referência é utilizável.
+function validateMedia(raw, label) {
+  const bad = (why) => fail(`Mensagem "${label}": campo "media" ${why}.`);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) bad('deve ser um objeto');
+  if (typeof raw.id !== 'string' || !/^[\w-]+$/.test(raw.id)) bad('precisa de um "id" válido');
+  if (typeof raw.filename !== 'string' || !raw.filename.trim()) bad('precisa de "filename"');
+  if (typeof raw.mimetype !== 'string' || !raw.mimetype.trim()) bad('precisa de "mimetype"');
+  if (!Number.isInteger(raw.size) || raw.size < 0) bad('precisa de "size" inteiro');
+  if (!MEDIA_KINDS.includes(raw.kind)) bad(`tem "kind" inválido "${raw.kind}" (use ${MEDIA_KINDS.join(', ')})`);
+  return { id: raw.id, filename: raw.filename.trim(), mimetype: raw.mimetype.trim(), size: raw.size, kind: raw.kind };
+}
+
 /**
  * Valida e normaliza uma mensagem da biblioteca.
  * @param {Record<string, unknown>} raw Mensagem crua.
  * @param {number} [index] Posição no array "messages" (rotula erros sem nome como #1, #2, ...).
- * @returns {{id: string, name: string, text: string}}
+ * @returns {{id: string, name: string, text: string, media?: object}}
  */
 export function validateMessage(raw, index) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -80,11 +94,14 @@ export function validateMessage(raw, index) {
   if (raw.id !== undefined && (typeof raw.id !== 'string' || !raw.id.trim())) {
     fail(`Mensagem "${label}": campo "id" deve ser um texto.`);
   }
+  // Sem anexo, o campo nem existe: o arquivo de quem não usa anexo não muda.
+  const media = raw.media == null ? null : validateMedia(raw.media, label);
 
   return {
     id: raw.id?.trim() || newId('msg'),
     name: raw.name.trim(),
     text: raw.text,
+    ...(media && { media }),
   };
 }
 
@@ -266,9 +283,13 @@ export function loadSchedules(path = config.schedulesPath) {
     throw new Error(`${err.message} (em ${path})`);
   }
 
-  const textById = new Map(store.messages.map((m) => [m.id, m.text]));
+  const byId = new Map(store.messages.map((m) => [m.id, m]));
   return {
     ...store,
-    schedules: store.schedules.map((s) => ({ ...s, message: textById.get(s.messageId) })),
+    schedules: store.schedules.map((s) => ({
+      ...s,
+      message: byId.get(s.messageId)?.text,
+      media: byId.get(s.messageId)?.media ?? null,
+    })),
   };
 }

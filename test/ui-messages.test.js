@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { startUi } from '../src/ui/server.js';
+
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
 function newStore(extra = {}) {
   const path = join(mkdtempSync(join(tmpdir(), 'waha-msg-')), 'schedules.json');
@@ -17,8 +19,8 @@ function newStore(extra = {}) {
   return path;
 }
 
-async function boot(t, schedulesPath) {
-  const { server, port } = await startUi({ schedulesPath, cfg: { uiPort: 0 } });
+async function boot(t, schedulesPath, cfg = {}) {
+  const { server, port } = await startUi({ schedulesPath, cfg: { uiPort: 0, ...cfg } });
   t.after(() => server.close());
   return (path, init) => fetch(`http://127.0.0.1:${port}${path}`, init);
 }
@@ -120,4 +122,91 @@ test('editar mensagem mantendo o próprio nome continua permitido', async (t) =>
   const res = await call('/api/messages/msg-a', json('PUT', { name: 'Oi', text: 'Olá de novo!' }));
   assert.equal(res.status, 200, 'um registro não pode ser acusado de ser duplicata de si mesmo');
   assert.equal((await res.json()).text, 'Olá de novo!');
+});
+
+// ---------- Anexo ----------
+
+const withMedia = (extra = {}) => ({
+  name: 'Foto', text: 'Olá', media: { filename: 'pixel.png', mimetype: 'image/png', data: PNG }, ...extra,
+});
+const mediaFiles = (schedulesPath) => {
+  const dir = join(dirname(schedulesPath), 'media');
+  return existsSync(dir) ? readdirSync(dir) : [];
+};
+
+test('cria mensagem com anexo, grava o arquivo ao lado do store e serve por /api/media', async (t) => {
+  const path = newStore();
+  const call = await boot(t, path);
+
+  const res = await call('/api/messages', json('POST', withMedia()));
+  const created = await res.json();
+  assert.equal(res.status, 201, JSON.stringify(created));
+  assert.match(created.media.id, /^med-/);
+  assert.equal(created.media.kind, 'image');
+  assert.equal(created.media.size, 70);
+  assert.equal(created.media.filename, 'pixel.png');
+  assert.equal('data' in created.media, false, 'o base64 não volta na resposta');
+  assert.deepEqual(mediaFiles(path), [`${created.media.id}.png`]);
+
+  const served = await call(`/api/media/${created.media.id}`);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get('content-type'), 'image/png');
+  assert.match(served.headers.get('content-disposition'), /inline/);
+  assert.equal(Buffer.from(await served.arrayBuffer()).toString('base64'), PNG);
+
+  assert.equal((await call('/api/media/med-nao-existe')).status, 404);
+});
+
+test('editar mantém, troca e remove o anexo', async (t) => {
+  const path = newStore();
+  const call = await boot(t, path);
+  const created = await (await call('/api/messages', json('POST', withMedia()))).json();
+  const url = `/api/messages/${created.id}`;
+
+  const kept = await (await call(url, json('PUT', { name: 'Foto 2', text: 'Olá', media: { id: created.media.id } }))).json();
+  assert.equal(kept.media.id, created.media.id, 'media: { id } mantém o anexo');
+  assert.deepEqual(mediaFiles(path), [`${created.media.id}.png`]);
+
+  const swapped = await (await call(url, json('PUT', withMedia({ name: 'Foto 2', media: { filename: 'outra.jpg', mimetype: 'image/jpeg', data: PNG } })))).json();
+  assert.notEqual(swapped.media.id, created.media.id);
+  assert.deepEqual(mediaFiles(path), [`${swapped.media.id}.jpg`], 'o arquivo antigo some');
+
+  const removed = await (await call(url, json('PUT', { name: 'Foto 2', text: 'Olá' }))).json();
+  assert.equal('media' in removed, false, 'sem media no corpo, o anexo sai');
+  assert.deepEqual(mediaFiles(path), []);
+});
+
+test('excluir a mensagem apaga o arquivo do anexo', async (t) => {
+  const path = newStore();
+  const call = await boot(t, path);
+  const created = await (await call('/api/messages', json('POST', withMedia()))).json();
+  assert.equal(mediaFiles(path).length, 1);
+
+  assert.equal((await call(`/api/messages/${created.id}`, del())).status, 200);
+  assert.deepEqual(mediaFiles(path), []);
+});
+
+test('anexo inválido responde 400 e não deixa arquivo', async (t) => {
+  const path = newStore();
+  const call = await boot(t, path, { maxMediaBytes: 10 });
+
+  const cases = [
+    [withMedia({ media: { filename: 'a.png', mimetype: 'png', data: PNG } }), /mimetype/],
+    [withMedia({ media: { filename: 'a.png', mimetype: 'image/png', data: '***' } }), /base64/],
+    [withMedia(), /passa do limite/],
+  ];
+  for (const [body, pattern] of cases) {
+    const res = await call('/api/messages', json('POST', body));
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, pattern);
+  }
+  assert.deepEqual(mediaFiles(path), []);
+});
+
+test('nome duplicado com anexo não deixa arquivo órfão', async (t) => {
+  const path = newStore();
+  const call = await boot(t, path);
+  const res = await call('/api/messages', json('POST', withMedia({ name: 'Oi' })));
+  assert.equal(res.status, 400);
+  assert.deepEqual(mediaFiles(path), []);
 });

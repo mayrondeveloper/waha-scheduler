@@ -16,7 +16,14 @@ import { actionRoutes } from './routes/actions.js';
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
 const MAX_BODY_BYTES = 1_000_000;
+// O anexo vai em base64 dentro do corpo da mensagem (16 MB viram 21,4 MB):
+// só as rotas de mensagem aceitam corpo grande.
+const MEDIA_BODY_BYTES = 24_000_000;
 const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
+
+function bodyLimitFor(path) {
+  return /^\/api\/messages(\/[^/]+)?$/.test(path) ? MEDIA_BODY_BYTES : MAX_BODY_BYTES;
+}
 
 // Status 5xx que a APLICAÇÃO escolhe deliberadamente, com mensagem escrita
 // por nós: hoje só o 502 de "o WAHA não respondeu", cuja mensagem é o
@@ -46,6 +53,7 @@ const STATIC_FILES = {
   '/schedules-view.js': ['schedules-view.js', JS],
   '/messages-view.js': ['messages-view.js', JS],
   '/history-view.js': ['history-view.js', JS],
+  '/media.js': ['media.js', JS],
   // Fontes do design system, embutidas: a tela não carrega nada da internet.
   '/fonts/geist.woff2': ['fonts/geist.woff2', 'font/woff2'],
   '/fonts/geist-mono.woff2': ['fonts/geist-mono.woff2', 'font/woff2'],
@@ -106,7 +114,7 @@ function sendJsonAndClose(req, res, status, body) {
   res.once('finish', () => setTimeout(() => req.destroy(), 50));
 }
 
-function readBody(req) {
+function readBody(req, limit = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     const decoder = new StringDecoder('utf8');
     let raw = '';
@@ -116,7 +124,7 @@ function readBody(req) {
     req.on('data', (chunk) => {
       if (settled) return;
       totalBytes += chunk.length;
-      if (totalBytes > MAX_BODY_BYTES) {
+      if (totalBytes > limit) {
         settled = true;
         const err = new Error('Corpo da requisição grande demais.');
         err.status = 413;
@@ -246,8 +254,17 @@ export function createServer(options = {}) {
     }
 
     try {
-      const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : {};
+      const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req, bodyLimitFor(path)) : {};
       const result = await handler.fn({ body, params: handler.params, url, schedulesPath, cfg });
+      // Resposta binária (o arquivo de um anexo): bytes crus com o tipo dele.
+      if (result.raw !== undefined) {
+        res.writeHead(result.status ?? 200, {
+          'Content-Type': result.contentType ?? 'application/octet-stream',
+          'Content-Length': result.raw.length,
+          ...(result.headers ?? {}),
+        });
+        return res.end(result.raw);
+      }
       return sendJson(res, result.status ?? 200, result.body);
     } catch (err) {
       const detail = describeError(err);
