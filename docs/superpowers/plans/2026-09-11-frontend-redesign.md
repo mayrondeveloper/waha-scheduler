@@ -1129,7 +1129,9 @@ test('negrito, itálico e tachado', () => {
 });
 
 test('marcador que não está colado na palavra não formata, como no WhatsApp', () => {
-  assert.equal(formatWhatsApp('* oi *'), line('* oi *'));
+  // No começo da linha, "* " é lista; no meio, espaço dentro dos asteriscos
+  // não formata.
+  assert.equal(formatWhatsApp('a * oi * b'), line('a * oi * b'));
   assert.equal(formatWhatsApp('2*3*4'), line('2*3*4'));
   assert.equal(formatWhatsApp('nome_do_arquivo_final'), line('nome_do_arquivo_final'));
   assert.equal(formatWhatsApp('*sem fim'), line('*sem fim'));
@@ -1150,6 +1152,10 @@ test('não atravessa quebra de linha', () => {
 test('código na linha e bloco não recebem formatação por dentro', () => {
   assert.equal(formatWhatsApp('`*a*`'), line('<code>*a*</code>'));
   assert.equal(formatWhatsApp('```*a*\n_b_```'), line('<pre>*a*\n_b_</pre>'));
+});
+
+test('dígitos do texto não se confundem com os trechos guardados', () => {
+  assert.equal(formatWhatsApp('`x` 0 1 2'), line('<code>x</code> 0 1 2'));
 });
 
 test('listas e citação', () => {
