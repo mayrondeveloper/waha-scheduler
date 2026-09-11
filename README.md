@@ -113,6 +113,15 @@ citação com `>`) e emojis, pela barra do editor. O texto é guardado e enviado
 cru, com os marcadores; a prévia ao lado mostra como ele chega no grupo. Um
 agendamento novo pode ter a mensagem escrita ali mesmo, em "Escrever nova".
 
+A aparência segue o design system do projeto, em
+`docs/design/waha-scheduler-design-system.html` (um arquivo só, abre direto no
+navegador): tema escuro, sem variante clara; fontes Geist e Geist Mono
+embutidas em `public/fonts/` (subconjunto latino, licença SIL OFL, nada é
+carregado da internet); verde dessaturado reservado para estado. Cada card de
+agendamento traz o badge de estado (Ativo, Pausado ou Falha no envio, este
+último a partir do último disparo daquele agendamento no histórico), os nomes
+dos grupos e, quando houve falha, o motivo e o horário.
+
 A tela escuta **apenas em localhost** — não é alcançável pela rede local nem
 pela internet, e por isso não tem senha. Não existe variável de ambiente para
 mudar isso: o host é sempre `127.0.0.1`, sem escotilha por env (não há

@@ -116,6 +116,17 @@ test('serve todos os módulos que a tela importa, como JavaScript', async (t) =>
   }
 });
 
+// As fontes do design system ficam no repositório: a tela abre sem internet.
+test('serve as fontes embutidas como font/woff2', async (t) => {
+  const call = await boot(t, newStore());
+  for (const name of ['geist.woff2', 'geist-mono.woff2']) {
+    const res = await call(`/fonts/${name}`);
+    assert.equal(res.status, 200, `/fonts/${name} tem que ser servido`);
+    assert.equal(res.headers.get('content-type'), 'font/woff2', name);
+    assert.ok((await res.arrayBuffer()).byteLength > 1000, `${name} não pode vir vazio`);
+  }
+});
+
 test('loadConfig não expõe mais uiHost (UI_HOST não é lido)', () => {
   const cfg = loadConfig({ UI_HOST: '0.0.0.0', UI_PORT: '0' });
   assert.equal('uiHost' in cfg, false, 'uiHost não deve mais existir na config');

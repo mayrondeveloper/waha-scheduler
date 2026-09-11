@@ -55,9 +55,11 @@ export function nextDispatch(schedules, nextRuns) {
   return best;
 }
 
-function item({ tone, text, detail }) {
+// "live" liga o pulso do ponto: é o indicador de vida do sistema, só para o
+// agendador rodando.
+function item({ tone, text, detail }, live = false) {
   return `
-    <span class="status-item tone-${tone}">
+    <span class="status-item tone-${tone}${live ? ' is-live' : ''}">
       <span class="dot" aria-hidden="true"></span>
       <span>${escape(text)}${detail ? `<span class="status-detail">${escape(detail)}</span>` : ''}</span>
     </span>`;
@@ -83,5 +85,5 @@ export function statusBar(input) {
     ? `<span class="status-next">${icon('clock')} Próximo envio: ${escape(formatWhen(next.at, { timeZone: status.timezone, now }))}, ${escape(next.schedule.name)}</span>`
     : '';
 
-  return `${item(notice)}${item(waha)}${nextHtml}`;
+  return `${item(notice, notice.tone === 'ok')}${item(waha)}${nextHtml}`;
 }

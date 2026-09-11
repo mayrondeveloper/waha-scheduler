@@ -46,6 +46,9 @@ const STATIC_FILES = {
   '/schedules-view.js': ['schedules-view.js', JS],
   '/messages-view.js': ['messages-view.js', JS],
   '/history-view.js': ['history-view.js', JS],
+  // Fontes do design system, embutidas: a tela não carrega nada da internet.
+  '/fonts/geist.woff2': ['fonts/geist.woff2', 'font/woff2'],
+  '/fonts/geist-mono.woff2': ['fonts/geist-mono.woff2', 'font/woff2'],
 };
 
 // Descreve qualquer valor lançado como texto útil para log — inclusive
