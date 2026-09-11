@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
@@ -88,6 +88,31 @@ test('recusa travessia de diretório nos estáticos', async (t) => {
   for (const alvo of ['/../src/config.js', '/..%2fpackage.json', '/../../etc/passwd']) {
     const res = await call(alvo);
     assert.equal(res.status, 404, `${alvo} não pode ser servido`);
+  }
+});
+
+test('serve todos os módulos que a tela importa, como JavaScript', async (t) => {
+  const call = await boot(t, newStore());
+  // Segue os imports a partir do main.js: um módulo novo esquecido na lista
+  // de estáticos quebraria a tela inteira no navegador sem nenhum teste falhar.
+  const publicDir = new URL('../public/', import.meta.url);
+  const files = new Set(['main.js']);
+  const queue = ['main.js'];
+  while (queue.length > 0) {
+    const source = readFileSync(new URL(queue.shift(), publicDir), 'utf8');
+    for (const [, name] of source.matchAll(/from '\.\/([\w-]+\.js)'/g)) {
+      if (!files.has(name)) {
+        files.add(name);
+        queue.push(name);
+      }
+    }
+  }
+
+  assert.ok(files.size >= 12, 'o main.js tem que alcançar todos os módulos da tela');
+  for (const name of files) {
+    const res = await call(`/${name}`);
+    assert.equal(res.status, 200, `/${name} tem que ser servido`);
+    assert.match(res.headers.get('content-type'), /text\/javascript/, name);
   }
 });
 

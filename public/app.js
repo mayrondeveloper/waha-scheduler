@@ -1,505 +1,801 @@
-// Tela de agendamentos: busca o estado da API e redesenha a cada alteração.
+// Tela de agendamentos: estado, carga, eventos, painel lateral e modais.
+// Nada roda ao importar este arquivo: quem inicia a tela é o main.js. Assim
+// os testes importam e chamam as funções com um document de mentira.
 
-const state = { schedules: [], messages: [], groups: [], logs: [], editing: null };
+import { api } from './api.js';
+import { escape, icon } from './html.js';
+import { formatWhen } from './dates.js';
+import { formatWhatsApp, toggleInline, toggleMonospace, toggleLinePrefix, insertText } from './whatsapp.js';
+import { recentEmojis, rememberEmoji } from './emoji.js';
+import { groupDispatches } from './history.js';
+import { statusBar } from './status-view.js';
+import {
+  scheduleList, scheduleForm, formCron, formGroups, searchKey, selectedCountLabel, sendConfirm, sendResult,
+} from './schedules-view.js';
+import { messageList, messageForm, emojiPanel } from './messages-view.js';
+import { historyView } from './history-view.js';
 
-// Métodos que o servidor considera mutantes: exige Content-Type: application/json
-// em TODOS eles, mesmo sem corpo (DELETE e POST /run não têm corpo e ainda
-// assim precisam do cabeçalho, ou o servidor devolve 415).
-const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const STATUS_POLL_MS = 15_000;
+const LOG_LIMIT = 500;
+const TABS = ['schedules', 'messages', 'history'];
+const EMPTY_PREVIEW = '<span class="muted">A prévia aparece aqui.</span>';
 
-const $ = (sel) => document.querySelector(sel);
+/** Estado da tela. Exportado para os testes. */
+export const state = {
+  schedules: [],
+  messages: [],
+  groups: [],
+  groupsLoaded: false,
+  groupsError: null,
+  logs: [],
+  status: null,
+  statusError: null,
+  // Diferença entre o relógio do servidor e o do navegador: "hoje" e
+  // "amanhã" contam pelo relógio da máquina do agendador.
+  clockOffset: 0,
+  tab: 'schedules',
+  // { type: 'schedule' | 'message', data, composing, snapshot }
+  editing: null,
+  sending: false,
+  historyFilter: { name: '', onlyFailed: false },
+  emojiTab: 'recent',
+};
 
-// Escapa qualquer interpolação que vá para dentro do HTML — tanto conteúdo de
-// elemento quanto, principalmente, valor de atributo (ex.: `data-id="${...}"`,
-// `value="${...}"`). Um id vindo do WAHA ou digitado pelo usuário pode conter
-// aspas e sinais de maior/menor; sem escapar, ele fecha o atributo e injeta
-// HTML/JS arbitrário na tela (XSS). TODA interpolação dentro de um atributo
-// tem que passar por aqui, sem exceção — não só a que "parece" texto livre.
-const escape = (value) =>
-  String(value).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
-  );
+const $ = (selector) => document.querySelector(selector);
+const drawer = () => $('#drawer');
+const modal = () => $('#modal');
+const now = () => Date.now() + state.clockOffset;
+const timeZone = () => state.status?.timezone;
+const groupName = (id) => state.groups.find((g) => g.id === id)?.name ?? id;
+const fieldValue = (form, name) => form.querySelector(`[name="${name}"]`)?.value ?? '';
 
-// Rastreia se a mensagem visível em #notice é o aviso de "grupos
-// indisponíveis" escrito por load(). Sem isso, qualquer notify() (inclusive
-// o limpar-antes-de-agir de withErrorHandling, ou o resumo de um disparo)
-// não saberia se pode apagar o que está na tela sem apagar informação de
-// outra ação. Ver "IMPORTANTE 1" no relatório da revisão.
-let groupsWarningActive = false;
+// ---------- Carga ----------
 
-function notify(message, type = 'error') {
-  const el = $('#notice');
-  el.textContent = message;
-  el.className = type === 'error' ? 'error' : 'success';
-  el.hidden = !message;
-  groupsWarningActive = false;
-}
-
-async function api(path, init) {
-  const method = (init?.method ?? 'GET').toUpperCase();
-  const res = await fetch(`/api${path}`, {
-    ...init,
-    // Manda o cabeçalho em todo método mutante, tenha corpo ou não — o
-    // servidor exige Content-Type: application/json até em DELETE e em
-    // POST /run, que não têm corpo. Ver aviso da Task 9.
-    headers: MUTATING_METHODS.has(method) ? { 'Content-Type': 'application/json' } : undefined,
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `Erro ${res.status} em ${path}`);
-  return body;
-}
-
-async function load() {
+/**
+ * Busca tudo da API e redesenha. O WAHA e o status podem falhar sem
+ * derrubar o resto da tela.
+ */
+export async function load() {
   const [schedules, messages, logs] = await Promise.all([
     api('/schedules'),
     api('/messages'),
-    api('/logs?limit=100'),
+    api(`/logs?limit=${LOG_LIMIT}`),
   ]);
   Object.assign(state, { schedules, messages, logs });
+  await refreshStatus({ quiet: true });
+  render();
+  await loadGroups();
+}
 
-  // O WAHA pode estar fora do ar: a tela continua utilizável sem a lista.
-  try {
-    state.groups = await api('/groups');
-    // Grupos voltaram: se o que está na tela ainda é o aviso de
-    // indisponibilidade que ESTA função escreveu, ele já não faz sentido.
-    // Se for outra coisa (ex.: o resumo de um disparo), não mexe nela.
-    if (groupsWarningActive) notify('');
-  } catch (err) {
-    state.groups = [];
-    notify(`Lista de grupos indisponível: ${err.message}. Digite os ids manualmente.`);
-    groupsWarningActive = true;
-  }
-
+async function reloadData() {
+  const [schedules, messages] = await Promise.all([api('/schedules'), api('/messages')]);
+  Object.assign(state, { schedules, messages });
+  await refreshStatus({ quiet: true });
   render();
 }
 
-function groupName(id) {
-  return state.groups.find((g) => g.id === id)?.name ?? id;
-}
-
-// A tela pede dias da semana e horário; o arquivo continua guardando um cron,
-// que é o que o agendador registra. A semana começa na segunda, como no
-// calendário brasileiro, mas o número é o do cron (0 = domingo).
-const WEEKDAYS = [
-  { value: 1, label: 'Seg' },
-  { value: 2, label: 'Ter' },
-  { value: 3, label: 'Qua' },
-  { value: 4, label: 'Qui' },
-  { value: 5, label: 'Sex' },
-  { value: 6, label: 'Sáb' },
-  { value: 0, label: 'Dom' },
-];
-
-const pad = (n) => String(n).padStart(2, '0');
-
-function buildCron(days, time) {
-  const [hour, minute] = time.split(':').map(Number);
-  const weekdays = days.length === WEEKDAYS.length ? '*' : [...days].sort((a, b) => a - b).join(',');
-  return `${minute} ${hour} * * ${weekdays}`;
-}
-
-// Só o cron no formato exato "minuto hora * * dias" vira dias e horário — é o
-// que a tela sabe desenhar. Qualquer outra forma (passo, dia do mês, mês,
-// segundos, nome de dia) devolve null e fica como cron personalizado.
-function parseCron(expr) {
-  const fields = String(expr).trim().split(/\s+/);
-  if (fields.length !== 5) return null;
-
-  const [minute, hour, dayOfMonth, month, weekdays] = fields;
-  if (!/^\d{1,2}$/.test(minute) || Number(minute) > 59) return null;
-  if (!/^\d{1,2}$/.test(hour) || Number(hour) > 23) return null;
-  if (dayOfMonth !== '*' || month !== '*') return null;
-
-  const days = [];
-  if (weekdays === '*') {
-    days.push(...WEEKDAYS.map((d) => d.value));
-  } else {
-    for (const part of weekdays.split(',')) {
-      const range = /^([0-7])(?:-([0-7]))?$/.exec(part);
-      if (!range) return null;
-      const start = Number(range[1]);
-      const end = range[2] === undefined ? start : Number(range[2]);
-      if (end < start) return null;
-      // 7 também é domingo no cron.
-      for (let day = start; day <= end; day++) days.push(day % 7);
-    }
+async function loadGroups() {
+  try {
+    state.groups = await api('/groups');
+    state.groupsError = null;
+  } catch (err) {
+    state.groups = [];
+    state.groupsError = err.message;
   }
-
-  return {
-    days: [...new Set(days)].sort((a, b) => a - b),
-    time: `${pad(Number(hour))}:${pad(Number(minute))}`,
-  };
+  state.groupsLoaded = true;
+  renderStatus();
+  // O painel pode ter aberto antes da lista chegar, com o campo de ids
+  // digitados. Se ninguém mexeu nele ainda, troca pela lista de grupos.
+  if (state.editing?.type === 'schedule' && drawer().open && !isDirty()) renderScheduleDrawer({ fresh: true });
 }
 
-function describeCron(expr) {
-  const parsed = parseCron(expr);
-  if (!parsed) return null;
+/**
+ * Consulta o status do agendador. Sem `quiet`, redesenha a faixa e, se os
+ * próximos envios mudaram (um disparo aconteceu), a aba e o histórico.
+ * @param {{quiet?: boolean}} [options]
+ */
+export async function refreshStatus({ quiet = false } = {}) {
+  const before = JSON.stringify(state.status?.nextRuns ?? null);
+  try {
+    const status = await api('/status');
+    state.status = status;
+    state.statusError = null;
+    state.clockOffset = Date.parse(status.now) - Date.now();
+  } catch (err) {
+    state.statusError = err.message;
+  }
+  if (quiet) return;
 
-  const labels = WEEKDAYS.filter((d) => parsed.days.includes(d.value)).map((d) => d.label);
-  const when = labels.length === WEEKDAYS.length ? 'Todo dia'
-    : labels.length === 1 ? labels[0]
-    : `${labels.slice(0, -1).join(', ')} e ${labels.at(-1)}`;
-  return `${when} às ${parsed.time}`;
+  renderStatus();
+  if (JSON.stringify(state.status?.nextRuns ?? null) !== before) {
+    try {
+      state.logs = await api(`/logs?limit=${LOG_LIMIT}`);
+    } catch (err) {
+      toast(`Não foi possível atualizar o histórico: ${err.message}`, 'error');
+    }
+    renderTab();
+  }
 }
 
-// Cron que o formulário representa agora: o campo cru, se o agendamento tem
-// um cron personalizado; senão, o montado a partir dos dias e do horário.
-// Devolve '' enquanto faltar dia ou horário — a prévia mostra "—" e o save
-// recusa.
-function formCron(form) {
-  const custom = form.querySelector('input[name="cron"]');
-  if (custom) return custom.value.trim();
-
-  const days = [...form.querySelectorAll('input[name="day"]:checked')].map((input) => Number(input.value));
-  const time = form.querySelector('input[name="time"]')?.value ?? '';
-  return days.length > 0 && time ? buildCron(days, time) : '';
-}
-
-function renderSchedules() {
-  const rows = state.schedules.map((s) => {
-    const when = describeCron(s.cron);
-    return `
-    <tr>
-      <td>${escape(s.name)}</td>
-      <td>${when ? escape(when) : `<code>${escape(s.cron)}</code>`}</td>
-      <td>${escape(state.messages.find((m) => m.id === s.messageId)?.name ?? '—')}</td>
-      <td>${s.groups.length}</td>
-      <td>
-        <button data-action="toggle" data-id="${escape(s.id)}">${s.enabled ? 'Ativo' : 'Inativo'}</button>
-      </td>
-      <td class="actions">
-        <button data-action="edit" data-id="${escape(s.id)}">Editar</button>
-        <button data-action="run" data-id="${escape(s.id)}">Disparar agora</button>
-        <button data-action="delete-schedule" data-id="${escape(s.id)}">Excluir</button>
-      </td>
-    </tr>`;
-  }).join('');
-
-  $('#schedules').innerHTML = `
-    <button data-action="new-schedule">Novo agendamento</button>
-    ${state.editing?.type === 'schedule' ? scheduleForm() : ''}
-    ${state.schedules.length === 0
-      ? '<p class="empty">Nenhum agendamento ainda.</p>'
-      : `<table>
-           <tr><th>Nome</th><th>Quando</th><th>Mensagem</th><th>Grupos</th><th>Estado</th><th></th></tr>
-           ${rows}
-         </table>`}`;
-
-  // O formulário acabou de ser desenhado com o cron já preenchido: sem isto,
-  // a prévia ficaria em "—" até o usuário mexer no campo.
-  if (state.editing?.type === 'schedule') updatePreview(state.editing.data.cron ?? '');
-}
-
-function scheduleForm() {
-  const s = state.editing.data;
-  const options = state.messages
-    .map((m) => `<option value="${escape(m.id)}" ${m.id === s.messageId ? 'selected' : ''}>${escape(m.name)}</option>`)
-    .join('');
-
-  // Um grupo já salvo no agendamento que o WAHA não lista (o bot saiu do
-  // grupo, a sessão reconectou com a lista parcial, o id foi digitado à mão)
-  // continua aparecendo no formulário, marcado e sinalizado. Se ele sumisse
-  // daqui, formGroups() devolveria uma lista sem ele e a API — que troca
-  // lista vazia por defaultGroups — passaria a mandar a mensagem para outro
-  // grupo, sem aviso nenhum, num save que só queria renomear o agendamento.
-  // Destino já salvo nunca é descartado em silêncio: quem decide é o usuário.
-  const saved = s.groups ?? [];
-  const missing = saved.filter((id) => !state.groups.some((g) => g.id === id));
-
-  const checkbox = (id, name, notFound) => `
-        <label class="${notFound ? 'group-missing' : ''}">
-          <input type="checkbox" name="group" value="${escape(id)}" ${saved.includes(id) ? 'checked' : ''} />
-          ${escape(name)} <small>${escape(id)}</small>
-          ${notFound ? '<small class="warn">não encontrado na lista atual do WAHA</small>' : ''}
-        </label>`;
-
-  const groupsMarkup = state.groups.length > 0
-    ? [
-        // Os não encontrados primeiro: é o que o usuário precisa decidir.
-        ...missing.map((id) => checkbox(id, id, true)),
-        ...state.groups.map((g) => checkbox(g.id, g.name, false)),
-      ].join('')
-    // Sem lista nenhuma do WAHA, o campo livre já vem preenchido com os ids
-    // salvos — também aqui nada é perdido por o WAHA estar fora do ar.
-    : `<input type="text" id="groups-text" value="${escape(saved.join(','))}"
-              placeholder="ids separados por vírgula" />`;
-
-  // Um cron personalizado (editado à mão no arquivo) aparece cru e é mantido
-  // como está: convertê-lo em dias e horário em silêncio mudaria quando o
-  // agendamento dispara, num save que talvez só quisesse trocar a mensagem.
-  const when = s.cron ? parseCron(s.cron) : { days: [], time: '' };
-  const whenMarkup = when
-    ? `
-      <fieldset class="days"><legend>Dias</legend>
-        ${WEEKDAYS.map((d) => `
-          <label>
-            <input type="checkbox" name="day" value="${escape(d.value)}" ${when.days.includes(d.value) ? 'checked' : ''} />
-            ${escape(d.label)}
-          </label>`).join('')}
-      </fieldset>
-      <label><span>Horário</span><input type="time" name="time" value="${escape(when.time)}" required /></label>`
-    : `
-      <p class="note">Este agendamento usa um cron personalizado, que não cabe em dias e horário. Ele é mantido como está.</p>
-      <label><span>Cron</span><input type="text" name="cron" value="${escape(s.cron)}" required /></label>`;
-
-  return `
-    <form id="form-schedule">
-      <label><span>Nome</span><input type="text" name="name" value="${escape(s.name ?? '')}" required /></label>
-      ${whenMarkup}
-      <p class="preview" id="preview">—</p>
-      <label><span>Mensagem</span><select name="messageId" required>${options}</select></label>
-      <fieldset><legend>Grupos</legend>${groupsMarkup}</fieldset>
-      <button type="submit">Salvar</button>
-      <button type="button" data-action="cancel">Cancelar</button>
-    </form>`;
-}
-
-function renderMessages() {
-  const rows = state.messages.map((m) => {
-    const usedBy = state.schedules.filter((s) => s.messageId === m.id).map((s) => s.name);
-    return `
-      <tr>
-        <td>${escape(m.name)}</td>
-        <td>${escape(m.text.slice(0, 60))}${m.text.length > 60 ? '…' : ''}</td>
-        <td>${usedBy.length ? escape(usedBy.join(', ')) : '<span class="empty">não usada</span>'}</td>
-        <td class="actions">
-          <button data-action="edit-message" data-id="${escape(m.id)}">Editar</button>
-          <button data-action="delete-message" data-id="${escape(m.id)}">Excluir</button>
-        </td>
-      </tr>`;
-  }).join('');
-
-  const m = state.editing?.type === 'message' ? state.editing.data : null;
-
-  $('#messages').innerHTML = `
-    <button data-action="new-message">Nova mensagem</button>
-    ${m ? `
-      <form id="form-message">
-        <label><span>Nome</span><input type="text" name="name" value="${escape(m.name ?? '')}" required /></label>
-        <label><span>Texto</span><textarea name="text" required>${escape(m.text ?? '')}</textarea></label>
-        <button type="submit">Salvar</button>
-        <button type="button" data-action="cancel">Cancelar</button>
-      </form>` : ''}
-    ${state.messages.length === 0
-      ? '<p class="empty">Nenhuma mensagem ainda.</p>'
-      : `<table><tr><th>Nome</th><th>Texto</th><th>Usada por</th><th></th></tr>${rows}</table>`}`;
-}
-
-function renderHistory() {
-  const rows = state.logs.map((l) => `
-    <tr class="${l.status === 'error' ? 'error' : ''}">
-      <td>${new Date(l.ts).toLocaleString('pt-BR')}</td>
-      <td>${l.status === 'error' ? 'ERRO' : 'OK'}</td>
-      <td>${escape(groupName(l.chatId))}</td>
-      <td>${escape(l.label ?? '—')}</td>
-      <td>${escape(l.error ?? l.message ?? '')}</td>
-    </tr>`).join('');
-
-  $('#history').innerHTML = state.logs.length === 0
-    ? '<p class="empty">Nenhum envio registrado.</p>'
-    : `<table><tr><th>Quando</th><th>Status</th><th>Grupo</th><th>Agendamento</th><th>Detalhe</th></tr>${rows}</table>`;
-}
+// ---------- Desenho ----------
 
 function render() {
-  renderSchedules();
-  renderMessages();
-  renderHistory();
+  renderStatus();
+  renderTabs();
+  renderTab();
 }
 
-// Token da última chamada em voo: uma resposta de uma digitação antiga
-// (ex.: rede lenta) não pode sobrescrever o preview de uma digitação mais
-// nova — a resposta que chega fora de ordem é simplesmente descartada.
+function renderStatus() {
+  $('#status').innerHTML = statusBar({
+    status: state.status,
+    statusError: state.statusError,
+    groupsError: state.groupsError,
+    groupsLoaded: state.groupsLoaded,
+    schedules: state.schedules,
+    now: now(),
+  });
+}
+
+function renderTabs() {
+  document.querySelectorAll('[data-tab]').forEach((button) => {
+    const active = button.dataset.tab === state.tab;
+    button.classList.toggle('is-active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+  for (const id of TABS) $(`#${id}`).hidden = id !== state.tab;
+
+  const primary = {
+    schedules: ['new-schedule', 'Novo agendamento'],
+    messages: ['new-message', 'Nova mensagem'],
+  }[state.tab];
+  $('#primary-action').innerHTML = primary
+    ? `<button type="button" class="btn btn-primary" data-action="${primary[0]}">${icon('plus')} ${primary[1]}</button>`
+    : '';
+}
+
+function renderTab() {
+  if (state.tab === 'schedules') {
+    $('#schedules').innerHTML = scheduleList({
+      schedules: state.schedules,
+      messages: state.messages,
+      nextRuns: state.status?.nextRuns,
+      timeZone: timeZone(),
+      now: now(),
+    });
+  } else if (state.tab === 'messages') {
+    $('#messages').innerHTML = messageList({ messages: state.messages, schedules: state.schedules });
+  } else {
+    $('#history').innerHTML = historyView({
+      dispatches: groupDispatches(state.logs),
+      filter: state.historyFilter,
+      groupName,
+      timeZone: timeZone(),
+      now: now(),
+    });
+  }
+}
+
+function toast(message, tone = 'ok') {
+  const el = document.createElement('div');
+  el.className = `toast tone-${tone}`;
+  el.innerHTML = `<span>${escape(message)}</span>${tone === 'error'
+    ? `<button type="button" class="icon-btn" data-action="dismiss-toast" aria-label="Fechar aviso">${icon('x')}</button>`
+    : ''}`;
+  // O aviso de sucesso some sozinho, pela animação do CSS; o de erro fica
+  // até ser fechado.
+  el.addEventListener('animationend', () => el.remove());
+  $('#toasts').append(el);
+}
+
+// Erro de formulário aparece dentro do painel ou do modal, perto do botão.
+// Se ele já fechou, vira aviso solto, mas nunca some.
+function showFormError(container, message) {
+  const el = container.querySelector('.form-error');
+  if (!el) {
+    toast(message, 'error');
+    return;
+  }
+  el.textContent = message;
+  el.hidden = false;
+}
+
+function hideFormError(container) {
+  const el = container.querySelector('.form-error');
+  if (!el) return;
+  el.textContent = '';
+  el.hidden = true;
+}
+
+// ---------- Painel lateral ----------
+
+function snapshotOf(form) {
+  return JSON.stringify([...form.querySelectorAll('input, select, textarea')]
+    .map((el) => (el.type === 'checkbox' ? el.checked : el.value)));
+}
+
+function isDirty() {
+  const form = drawer().querySelector('form');
+  return Boolean(form && state.editing && snapshotOf(form) !== state.editing.snapshot);
+}
+
+function showDrawer(html, { fresh }) {
+  const d = drawer();
+  d.innerHTML = html;
+  if (!d.open) d.showModal();
+  if (fresh) state.editing.snapshot = snapshotOf(d.querySelector('form'));
+}
+
+function renderScheduleDrawer({ fresh = false } = {}) {
+  showDrawer(scheduleForm({
+    schedule: state.editing.data,
+    messages: state.messages,
+    groups: state.groups,
+    groupsError: state.groupsError,
+    composing: state.editing.composing,
+    timezoneLabel: state.status?.timezoneLabel,
+  }), { fresh });
+  updatePreview(state.editing.data.cron ?? '');
+}
+
+/**
+ * Abre o painel de agendamento: novo (sem id) ou edição.
+ * @param {string} [id]
+ */
+export function openScheduleEditor(id) {
+  const data = id
+    ? structuredClone(state.schedules.find((s) => s.id === id))
+    : { name: '', cron: '', messageId: state.messages[0]?.id, groups: [], enabled: true };
+  state.editing = { type: 'schedule', data, composing: false, snapshot: '' };
+  renderScheduleDrawer({ fresh: true });
+}
+
+/**
+ * Abre o painel de mensagem: nova (sem id) ou edição.
+ * @param {string} [id]
+ */
+export function openMessageEditor(id) {
+  const data = id ? structuredClone(state.messages.find((m) => m.id === id)) : { name: '', text: '' };
+  state.editing = { type: 'message', data, composing: false, snapshot: '' };
+  showDrawer(messageForm({ message: data }), { fresh: true });
+}
+
+async function requestCloseDrawer() {
+  if (isDirty()) {
+    const discard = await confirmDialog({
+      title: 'Descartar alterações?',
+      body: 'O que você mudou neste formulário ainda não foi salvo.',
+      confirm: 'Descartar',
+      danger: true,
+    });
+    if (!discard) return;
+  }
+  closeDrawer();
+}
+
+function closeDrawer() {
+  state.editing = null;
+  const d = drawer();
+  if (d.open) d.close();
+  d.innerHTML = '';
+}
+
+// Guarda o que está no formulário antes de redesenhá-lo (trocar entre
+// mensagem existente e nova), para não perder o que já foi digitado.
+function captureScheduleForm() {
+  const form = drawer().querySelector('form');
+  const data = state.editing.data;
+  data.name = fieldValue(form, 'name');
+  data.cron = formCron(form);
+  data.groups = formGroups(form);
+  const messageId = fieldValue(form, 'messageId');
+  if (messageId) data.messageId = messageId;
+}
+
+// Token da última chamada em voo: a resposta de uma digitação antiga (rede
+// lenta) não pode sobrescrever a prévia de uma digitação mais nova.
 let previewToken = 0;
 
-async function updatePreview(expr) {
-  const el = $('#preview');
+/**
+ * Atualiza os próximos envios mostrados no formulário aberto.
+ * @param {string} expr Cron que o formulário representa agora.
+ */
+export async function updatePreview(expr) {
+  const el = drawer().querySelector('#preview');
   if (!el) return;
-
   const token = ++previewToken;
 
   if (!expr.trim()) {
-    el.textContent = '—';
     el.className = 'preview';
+    el.textContent = 'Marque os dias e o horário para ver os próximos envios.';
     return;
   }
 
   try {
     const { valid, next, reason } = await api(`/cron/preview?expr=${encodeURIComponent(expr)}`);
-    if (token !== previewToken) return; // resposta obsoleta: já existe uma digitação mais recente.
-
+    if (token !== previewToken) return;
     el.className = valid ? 'preview' : 'preview invalid';
     if (!valid) {
       // "reason" só vem quando a expressão passa na checagem estática mas o
-      // node-cron recusa registrá-la (ex.: "0 0 31W 2 *"): é a única pista
-      // que o usuário tem de por que aquela expressão não serve.
+      // node-cron recusa registrá-la: é a única pista do porquê.
       el.textContent = reason ? `Expressão cron inválida: ${reason}` : 'Expressão cron inválida';
     } else if (next.length === 0) {
-      el.textContent = 'Nenhum disparo previsto';
+      el.textContent = 'Nenhum envio previsto';
     } else {
-      el.textContent = `Próximos: ${next.map((d) => new Date(d).toLocaleString('pt-BR')).join(' · ')}`;
+      const when = next.map((d) => formatWhen(d, { timeZone: timeZone(), now: now() }));
+      el.textContent = `Próximos envios: ${when.join(' · ')}`;
     }
   } catch (err) {
     if (token !== previewToken) return;
-    // Falha no preview não pode passar em silêncio nem deixar o horário da
-    // expressão ANTERIOR parecendo válido ao lado de uma expressão nova:
-    // limpa o horário obsoleto e avisa que não deu para calcular.
+    // A falha não pode deixar os horários da expressão ANTERIOR parecendo
+    // válidos ao lado de uma expressão nova.
     el.className = 'preview invalid';
-    el.textContent = `Não foi possível calcular o preview: ${err.message}`;
+    el.textContent = `Não foi possível calcular os próximos envios: ${err.message}`;
   }
 }
 
-function formGroups(form) {
-  const text = form.querySelector('#groups-text');
-  if (text) return text.value.split(',').map((g) => g.trim()).filter(Boolean);
-  return [...form.querySelectorAll('input[name="group"]:checked')].map((i) => i.value);
+function setDays(form, days) {
+  form.querySelectorAll('input[name="day"]').forEach((input) => {
+    input.checked = days.includes(Number(input.value));
+  });
+  updatePreview(formCron(form));
 }
 
-async function withErrorHandling(fn) {
-  // Limpa antes de agir (mensagem antiga não pode confundir uma ação nova),
-  // mas note o que NÃO tem aqui: nenhum notify('') depois do await fn(). O
-  // sucesso de uma ação não pode apagar a mensagem que essa mesma ação
-  // acabou de escrever (ex.: o resumo de um disparo, ou o aviso de grupos
-  // indisponíveis que load() re-escreveu). Ver "IMPORTANTE 1" no relatório.
-  notify('');
+function filterGroups(input) {
+  const query = searchKey(input.value.trim());
+  input.form.querySelectorAll('.group').forEach((label) => {
+    label.hidden = query !== '' && !label.dataset.name.includes(query);
+  });
+}
+
+function updateGroupCount(form) {
+  const counter = form.querySelector('#groups-count');
+  if (counter) counter.textContent = selectedCountLabel(form.querySelectorAll('input[name="group"]:checked').length);
+}
+
+function updateMessagePreview(select) {
+  const message = state.messages.find((m) => m.id === select.value);
+  const preview = select.form.querySelector('#message-preview');
+  if (preview) preview.innerHTML = message ? formatWhatsApp(message.text) : '';
+}
+
+// ---------- Editor de mensagem ----------
+
+function updateEditorPreview(textarea) {
+  const preview = textarea.closest('.editor').querySelector('[data-role="editor-preview"]');
+  preview.innerHTML = textarea.value.trim() ? formatWhatsApp(textarea.value) : EMPTY_PREVIEW;
+}
+
+// Troca o texto do campo mantendo o desfazer (⌘Z) do navegador quando dá:
+// execCommand('insertText') entra no histórico de edição; atribuir .value não.
+function replaceText(textarea, { text, start, end }) {
+  textarea.focus();
+  textarea.setSelectionRange(0, textarea.value.length);
+  if (!document.execCommand?.('insertText', false, text)) textarea.value = text;
+  textarea.setSelectionRange(start, end);
+  updateEditorPreview(textarea);
+}
+
+function applyFormat(button) {
+  const editor = button.closest('.editor');
+  if (button.dataset.format === 'emoji') {
+    toggleEmojiPanel(editor);
+    return;
+  }
+  const textarea = editor.querySelector('textarea[data-editor]');
+  const { value, selectionStart: start, selectionEnd: end } = textarea;
+  const formats = {
+    bold: () => toggleInline(value, start, end, '*'),
+    italic: () => toggleInline(value, start, end, '_'),
+    strike: () => toggleInline(value, start, end, '~'),
+    mono: () => toggleMonospace(value, start, end),
+    bullet: () => toggleLinePrefix(value, start, end, 'bullet'),
+    numbered: () => toggleLinePrefix(value, start, end, 'numbered'),
+    quote: () => toggleLinePrefix(value, start, end, 'quote'),
+  };
+  replaceText(textarea, formats[button.dataset.format]());
+}
+
+// O localStorage pode lançar só por ser acessado (navegador bloqueando dados
+// do site). Sem ele, a aba Recentes fica vazia; o resto funciona.
+function storage() {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function renderEmojiPanel(panel) {
+  panel.innerHTML = emojiPanel({ active: state.emojiTab, recents: recentEmojis(storage()) });
+}
+
+function toggleEmojiPanel(editor) {
+  const panel = editor.querySelector('[data-role="emoji-panel"]');
+  if (!panel.hidden) {
+    panel.hidden = true;
+    return;
+  }
+  // Na primeira vez não há recentes: abre direto nos rostos.
+  if (state.emojiTab === 'recent' && recentEmojis(storage()).length === 0) state.emojiTab = 'faces';
+  renderEmojiPanel(panel);
+  panel.hidden = false;
+}
+
+function pickEmoji(button) {
+  const textarea = button.closest('.editor').querySelector('textarea[data-editor]');
+  const emoji = button.dataset.emoji;
+  rememberEmoji(storage(), emoji);
+  replaceText(textarea, insertText(textarea.value, textarea.selectionStart, textarea.selectionEnd, emoji));
+}
+
+// ---------- Modais ----------
+
+// Confirmação da tela, no lugar do confirm() do navegador. Resolve true só no
+// botão de confirmar; Esc, clique fora e Cancelar resolvem false.
+function confirmDialog({ title, body, confirm, danger = false }) {
+  const m = modal();
+  m.innerHTML = `
+    <form method="dialog" class="modal-box">
+      <h2 id="modal-title">${escape(title)}</h2>
+      <p class="modal-text">${escape(body)}</p>
+      <div class="modal-actions">
+        <button type="submit" value="cancel" class="btn">Cancelar</button>
+        <button type="submit" value="confirm" class="btn ${danger ? 'btn-danger' : 'btn-primary'}">${escape(confirm)}</button>
+      </div>
+    </form>`;
+  m.returnValue = '';
+  return new Promise((resolve) => {
+    m.addEventListener('close', () => resolve(m.returnValue === 'confirm'), { once: true });
+    m.showModal();
+  });
+}
+
+function openSendModal(id) {
+  const schedule = state.schedules.find((s) => s.id === id);
+  const message = state.messages.find((m) => m.id === schedule.messageId);
+  const m = modal();
+  m.innerHTML = sendConfirm({ schedule, message, groupName });
+  m.returnValue = '';
+  m.showModal();
+}
+
+async function confirmSend(button, id) {
+  const m = modal();
+  const schedule = state.schedules.find((s) => s.id === id);
+  const cancel = m.querySelector('[data-action="close-modal"]');
+  const label = button.innerHTML;
+  // Um envio com vários grupos e intervalo entre eles pode levar dezenas de
+  // segundos: o modal fica travado para um clique impaciente não mandar duas
+  // vezes. Fila e retry são proibidos no projeto; a defesa é da tela.
+  state.sending = true;
+  button.disabled = true;
+  cancel.disabled = true;
+  button.textContent = 'Enviando…';
+  hideFormError(m);
+
+  let result;
+  try {
+    result = await api(`/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' });
+  } catch (err) {
+    button.disabled = false;
+    cancel.disabled = false;
+    button.innerHTML = label;
+    showFormError(m, err.message);
+    return;
+  } finally {
+    state.sending = false;
+  }
+
+  m.innerHTML = sendResult({ schedule, result, groupName });
+  try {
+    state.logs = await api(`/logs?limit=${LOG_LIMIT}`);
+    if (state.tab === 'history') renderTab();
+  } catch (err) {
+    toast(`Não foi possível atualizar o histórico: ${err.message}`, 'error');
+  }
+}
+
+// ---------- Ações ----------
+
+async function guarded(fn) {
   try {
     await fn();
   } catch (err) {
-    notify(err.message);
+    toast(err.message, 'error');
   }
 }
 
-document.addEventListener('click', (evt) => {
-  const tabButton = evt.target.closest('nav button');
-  if (tabButton) {
-    document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b === tabButton));
-    ['schedules', 'messages', 'history'].forEach((id) => {
-      $(`#${id}`).hidden = id !== tabButton.dataset.tab;
+async function toggleSchedule(id) {
+  const schedule = state.schedules.find((s) => s.id === id);
+  await api(`/schedules/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled: !schedule.enabled }),
+  });
+  toast(schedule.enabled ? `"${schedule.name}" pausado` : `"${schedule.name}" ativado`);
+  await reloadData();
+}
+
+async function deleteSchedule(id) {
+  const schedule = state.schedules.find((s) => s.id === id);
+  const ok = await confirmDialog({
+    title: `Excluir "${schedule.name}"?`,
+    body: 'O agendamento sai da lista e para de enviar. A mensagem continua na aba Mensagens.',
+    confirm: 'Excluir',
+    danger: true,
+  });
+  if (!ok) return;
+  await api(`/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  toast(`Agendamento "${schedule.name}" excluído`);
+  await reloadData();
+}
+
+async function deleteMessage(id) {
+  const message = state.messages.find((m) => m.id === id);
+  const ok = await confirmDialog({
+    title: `Excluir "${message.name}"?`,
+    body: 'A mensagem sai da biblioteca. Se algum agendamento usa ela, a exclusão é recusada.',
+    confirm: 'Excluir',
+    danger: true,
+  });
+  if (!ok) return;
+  await api(`/messages/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  toast(`Mensagem "${message.name}" excluída`);
+  await reloadData();
+}
+
+async function persistSchedule(data) {
+  const payload = { name: data.name, cron: data.cron, messageId: data.messageId, groups: data.groups };
+  if (data.id) {
+    await api(`/schedules/${encodeURIComponent(data.id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...payload, enabled: data.enabled }),
     });
+  } else {
+    await api('/schedules', { method: 'POST', body: JSON.stringify(payload) });
+  }
+}
+
+async function saveSchedule(form) {
+  // O horário e o cron cru já são obrigatórios no próprio campo; o que o
+  // navegador não barra é nenhum dia marcado.
+  const cron = formCron(form);
+  if (!cron) throw new Error('Selecione ao menos um dia da semana e o horário.');
+  const groups = formGroups(form);
+  // A API recusa lista vazia com 400. Barrar aqui evita a ida e volta e
+  // deixa claro que desmarcar tudo não significa "herda os defaults".
+  if (groups.length === 0) throw new Error('Selecione ao menos um grupo de destino.');
+
+  const editing = state.editing;
+  editing.data = { ...editing.data, name: fieldValue(form, 'name'), cron, groups };
+
+  if (form.querySelector('[name="messageText"]')) {
+    // "Escrever nova": grava a mensagem primeiro. Se o agendamento for
+    // recusado depois, o painel volta com ela já escolhida, e tentar de novo
+    // não cria outra.
+    const created = await api('/messages', {
+      method: 'POST',
+      body: JSON.stringify({ name: fieldValue(form, 'messageName'), text: fieldValue(form, 'messageText') }),
+    });
+    state.messages = [...state.messages, created];
+    editing.data.messageId = created.id;
+    editing.composing = false;
+    try {
+      await persistSchedule(editing.data);
+    } catch (err) {
+      renderScheduleDrawer();
+      throw err;
+    }
+  } else {
+    editing.data.messageId = fieldValue(form, 'messageId');
+    await persistSchedule(editing.data);
+  }
+
+  const name = editing.data.name.trim();
+  closeDrawer();
+  toast(`Agendamento "${name}" salvo`);
+  await reloadData();
+}
+
+async function saveMessage(form) {
+  const payload = { name: fieldValue(form, 'name'), text: fieldValue(form, 'text') };
+  const id = state.editing.data.id;
+  await api(id ? `/messages/${encodeURIComponent(id)}` : '/messages', {
+    method: id ? 'PUT' : 'POST',
+    body: JSON.stringify(payload),
+  });
+  closeDrawer();
+  toast(`Mensagem "${payload.name.trim()}" salva`);
+  await reloadData();
+}
+
+// ---------- Eventos ----------
+
+// Fecha o que flutua (menu "⋯", seletor de emojis) quando o clique é fora dele.
+function closeFloating(target) {
+  document.querySelectorAll('details.menu[open]').forEach((menu) => {
+    if (!menu.contains(target)) menu.open = false;
+  });
+  document.querySelectorAll('[data-role="emoji-panel"]:not([hidden])').forEach((panel) => {
+    if (!panel.parentElement.contains(target)) panel.hidden = true;
+  });
+}
+
+/**
+ * Delegação de cliques da tela inteira. Exportado para os testes.
+ * @param {MouseEvent} evt
+ */
+export function handleClick(evt) {
+  const target = evt.target;
+  if (typeof target?.closest !== 'function') return;
+  closeFloating(target);
+
+  const tab = target.closest('[data-tab]');
+  if (tab) {
+    state.tab = tab.dataset.tab;
+    renderTabs();
+    renderTab();
     return;
   }
 
-  const target = evt.target.closest('[data-action]');
-  if (!target) return;
-  if (target.disabled) return;
-  const { action, id } = target.dataset;
+  const format = target.closest('[data-format]');
+  if (format) {
+    applyFormat(format);
+    return;
+  }
+
+  const emojiTab = target.closest('[data-emoji-tab]');
+  if (emojiTab) {
+    state.emojiTab = emojiTab.dataset.emojiTab;
+    renderEmojiPanel(emojiTab.closest('[data-role="emoji-panel"]'));
+    return;
+  }
+
+  const emoji = target.closest('[data-emoji]');
+  if (emoji) {
+    pickEmoji(emoji);
+    return;
+  }
+
+  const el = target.closest('[data-action]');
+  if (!el || el.disabled) return;
+  el.closest('details.menu')?.removeAttribute('open');
+  const { action, id } = el.dataset;
 
   const actions = {
-    'new-schedule': () => {
-      state.editing = { type: 'schedule', data: { messageId: state.messages[0]?.id, groups: [] } };
-      render();
+    'new-schedule': () => openScheduleEditor(),
+    edit: () => openScheduleEditor(id),
+    'new-message': () => openMessageEditor(),
+    'edit-message': () => openMessageEditor(id),
+    'close-drawer': () => requestCloseDrawer(),
+    'close-modal': () => modal().close(),
+    'compose-message': () => {
+      captureScheduleForm();
+      state.editing.composing = true;
+      renderScheduleDrawer();
     },
-    edit: () => {
-      state.editing = { type: 'schedule', data: state.schedules.find((s) => s.id === id) };
-      render();
+    'pick-message': () => {
+      captureScheduleForm();
+      state.editing.composing = false;
+      renderScheduleDrawer();
     },
-    'new-message': () => {
-      state.editing = { type: 'message', data: {} };
-      render();
+    'days-weekdays': () => setDays(el.form, [1, 2, 3, 4, 5]),
+    'days-all': () => setDays(el.form, [0, 1, 2, 3, 4, 5, 6]),
+    toggle: () => guarded(() => toggleSchedule(id)),
+    run: () => openSendModal(id),
+    'confirm-send': () => confirmSend(el, id),
+    'delete-schedule': () => guarded(() => deleteSchedule(id)),
+    'delete-message': () => guarded(() => deleteMessage(id)),
+    'history-all': () => {
+      state.historyFilter.onlyFailed = false;
+      renderTab();
     },
-    'edit-message': () => {
-      state.editing = { type: 'message', data: state.messages.find((m) => m.id === id) };
-      render();
+    'history-failed': () => {
+      state.historyFilter.onlyFailed = true;
+      renderTab();
     },
-    cancel: () => {
-      state.editing = null;
-      render();
-    },
-    toggle: () => withErrorHandling(async () => {
-      const current = state.schedules.find((s) => s.id === id);
-      await api(`/schedules/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !current.enabled }) });
-      await load();
-    }),
-    'delete-schedule': () => withErrorHandling(async () => {
-      const schedule = state.schedules.find((s) => s.id === id);
-      if (!confirm(`Excluir o agendamento "${schedule.name}"?`)) return;
-      await api(`/schedules/${id}`, { method: 'DELETE' });
-      await load();
-    }),
-    'delete-message': () => withErrorHandling(async () => {
-      const message = state.messages.find((m) => m.id === id);
-      if (!confirm(`Excluir a mensagem "${message.name}"?`)) return;
-      await api(`/messages/${id}`, { method: 'DELETE' });
-      await load();
-    }),
-    run: () => withErrorHandling(async () => {
-      const targetSchedule = state.schedules.find((s) => s.id === id);
-      // Com WAHA real configurado, isto envia mensagem de verdade agora.
-      const confirmText = `Enviar "${targetSchedule.name}" AGORA para ${targetSchedule.groups.length} grupo(s)?\n\n`
-        + 'Isso manda mensagem de verdade no WhatsApp.';
-      if (!confirm(confirmText)) return;
-
-      // Desabilita o botão e dá retorno visual enquanto o disparo está em
-      // voo: um broadcast com vários grupos e delay entre eles pode demorar
-      // dezenas de segundos, e sem isso um clique impaciente manda duas
-      // vezes. Fila e retry são proibidos no projeto — a defesa é da tela.
-      const originalText = target.textContent;
-      target.disabled = true;
-      target.textContent = 'Enviando…';
-      try {
-        const { sent, failed } = await api(`/schedules/${id}/run`, { method: 'POST' });
-        notify(`Disparo concluído: ${sent} enviada(s), ${failed} falha(s).`, 'ok');
-        await load();
-      } finally {
-        // Em sucesso, load() já substituiu a linha (botão novo, habilitado).
-        // Em erro, o botão original continua no DOM e precisa ser reabilitado.
-        if (target.isConnected) {
-          target.disabled = false;
-          target.textContent = originalText;
-        }
-      }
-    }),
+    'dismiss-toast': () => el.closest('.toast')?.remove(),
   };
-
   actions[action]?.();
-});
+}
 
-document.addEventListener('input', (evt) => {
-  if (['day', 'time', 'cron'].includes(evt.target.name)) updatePreview(formCron(evt.target.form));
-});
+/**
+ * Delegação de digitação. Exportado para os testes.
+ * @param {InputEvent} evt
+ */
+export function handleInput(evt) {
+  const target = evt.target;
+  if (['day', 'time', 'cron'].includes(target.name)) {
+    updatePreview(formCron(target.form));
+  } else if (target.dataset?.editor !== undefined) {
+    updateEditorPreview(target);
+  } else if (target.dataset?.role === 'group-search') {
+    filterGroups(target);
+  }
+}
 
-document.addEventListener('submit', (evt) => {
+function handleChange(evt) {
+  const target = evt.target;
+  if (target.name === 'group') {
+    updateGroupCount(target.form);
+  } else if (target.name === 'messageId') {
+    updateMessagePreview(target);
+  } else if (target.dataset?.role === 'history-name') {
+    state.historyFilter.name = target.value;
+    renderTab();
+  }
+}
+
+function handleKeydown(evt) {
+  const target = evt.target;
+  if (target.dataset?.editor === undefined || !(evt.metaKey || evt.ctrlKey)) return;
+  const key = evt.key.toLowerCase();
+  if (key !== 'b' && key !== 'i') return;
   evt.preventDefault();
+  replaceText(target, toggleInline(target.value, target.selectionStart, target.selectionEnd, key === 'b' ? '*' : '_'));
+}
+
+/**
+ * Envio dos formulários do painel. Exportado para os testes.
+ * @param {SubmitEvent} evt
+ */
+export async function handleSubmit(evt) {
   const form = evt.target;
+  // Formulário de modal (method="dialog") fecha sozinho com o valor do botão.
+  if (form.getAttribute('method') === 'dialog') return;
+  evt.preventDefault();
 
-  withErrorHandling(async () => {
-    if (form.id === 'form-schedule') {
-      // O horário e o cron cru já são obrigatórios no próprio campo; o que o
-      // navegador não barra é nenhum dia marcado.
-      const cron = formCron(form);
-      if (!cron) {
-        throw new Error('Selecione ao menos um dia da semana e o horário.');
-      }
+  const submit = form.querySelector('[type="submit"]');
+  if (submit) submit.disabled = true;
+  hideFormError(drawer());
+  try {
+    if (form.id === 'form-schedule') await saveSchedule(form);
+    else if (form.id === 'form-message') await saveMessage(form);
+  } catch (err) {
+    showFormError(drawer(), err.message);
+  } finally {
+    if (submit?.isConnected) submit.disabled = false;
+  }
+}
 
-      const groups = formGroups(form);
-      // A API recusa lista vazia com 400. Barrar aqui evita a ida e volta e
-      // deixa claro que desmarcar tudo não significa "herda os defaults".
-      if (groups.length === 0) {
-        throw new Error('Selecione ao menos um grupo de destino.');
-      }
+/** Liga os eventos, busca os dados e passa a acompanhar o status do agendador. */
+export function start() {
+  document.addEventListener('click', handleClick);
+  document.addEventListener('input', handleInput);
+  document.addEventListener('change', handleChange);
+  document.addEventListener('submit', handleSubmit);
+  document.addEventListener('keydown', handleKeydown);
 
-      const payload = {
-        name: form.name.value,
-        cron,
-        messageId: form.messageId.value,
-        groups,
-      };
-      const editingId = state.editing.data.id;
-      await api(editingId ? `/schedules/${editingId}` : '/schedules', {
-        method: editingId ? 'PUT' : 'POST',
-        body: JSON.stringify(editingId ? { ...payload, enabled: state.editing.data.enabled } : payload),
-      });
-    } else {
-      const payload = { name: form.name.value, text: form.text.value };
-      const editingId = state.editing.data.id;
-      await api(editingId ? `/messages/${editingId}` : '/messages', {
-        method: editingId ? 'PUT' : 'POST',
-        body: JSON.stringify(payload),
-      });
-    }
-
-    state.editing = null;
-    await load();
+  const d = drawer();
+  // Esc fecha primeiro o seletor de emojis; depois pede para fechar o
+  // painel, perguntando se há alteração não salva.
+  d.addEventListener('cancel', (evt) => {
+    evt.preventDefault();
+    const panel = d.querySelector('[data-role="emoji-panel"]:not([hidden])');
+    if (panel) panel.hidden = true;
+    else requestCloseDrawer();
   });
-});
+  // Clique no fundo escurecido: o alvo é o próprio <dialog>, não o conteúdo.
+  d.addEventListener('click', (evt) => {
+    if (evt.target === d) requestCloseDrawer();
+  });
+  // Se o navegador fechar o painel por conta própria, a edição acabou.
+  d.addEventListener('close', () => {
+    state.editing = null;
+  });
 
-load().catch((err) => notify(err.message));
+  const m = modal();
+  m.addEventListener('cancel', (evt) => {
+    if (state.sending) evt.preventDefault();
+  });
+  m.addEventListener('click', (evt) => {
+    if (evt.target === m && !state.sending) m.close();
+  });
+
+  setInterval(() => refreshStatus(), STATUS_POLL_MS);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshStatus();
+  });
+
+  load().catch((err) => toast(`Não foi possível carregar a tela: ${err.message}`, 'error'));
+}

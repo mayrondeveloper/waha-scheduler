@@ -3,27 +3,37 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>waha-scheduler</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header>
-      <h1>waha-scheduler</h1>
-      <nav>
-        <button data-tab="schedules" class="active">Agendamentos</button>
-        <button data-tab="messages">Mensagens</button>
-        <button data-tab="history">Histórico</button>
-      </nav>
-    </header>
+    <div class="status-bar">
+      <div id="status" class="status container"></div>
+    </div>
 
-    <p id="notice" hidden></p>
+    <div class="container">
+      <header class="topbar">
+        <h1 class="brand">waha-scheduler</h1>
+        <nav class="tabs" aria-label="Seções">
+          <button type="button" class="tab is-active" data-tab="schedules" aria-current="page">Agendamentos</button>
+          <button type="button" class="tab" data-tab="messages">Mensagens</button>
+          <button type="button" class="tab" data-tab="history">Histórico</button>
+        </nav>
+        <div id="primary-action" class="topbar-action"></div>
+      </header>
 
-    <main>
-      <section id="schedules"></section>
-      <section id="messages" hidden></section>
-      <section id="history" hidden></section>
-    </main>
+      <main>
+        <section id="schedules" aria-label="Agendamentos"></section>
+        <section id="messages" aria-label="Mensagens" hidden></section>
+        <section id="history" aria-label="Histórico" hidden></section>
+      </main>
+    </div>
 
-    <script type="module" src="/app.js"></script>
+    <dialog id="drawer" class="drawer" aria-labelledby="drawer-title"></dialog>
+    <dialog id="modal" class="modal" aria-labelledby="modal-title"></dialog>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+
+    <script type="module" src="/main.js"></script>
   </body>
 </html>
