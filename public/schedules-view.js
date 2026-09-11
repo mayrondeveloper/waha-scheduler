@@ -1,7 +1,7 @@
 // Aba de agendamentos: a lista, o formulário do painel lateral e o modal de
 // envio imediato. Só gera HTML e lê o formulário recebido.
 
-import { escape, icon } from './html.js';
+import { escape, icon, badge } from './html.js';
 import { WEEKDAYS, buildCron, parseCron, describeCron } from './cron.js';
 import { formatWhen } from './dates.js';
 import { formatWhatsApp } from './whatsapp.js';
@@ -27,30 +27,73 @@ export function selectedCountLabel(count) {
   return count === 1 ? '1 selecionado' : `${count} selecionados`;
 }
 
+/**
+ * Subtítulo do cabeçalho da aba: "3 agendamentos · 1 ativo".
+ * @param {object[]} schedules
+ * @returns {string}
+ */
+export function schedulesSubtitle(schedules) {
+  const n = schedules.length;
+  if (n === 0) return 'Nenhum agendamento';
+  const active = schedules.filter((s) => s.enabled).length;
+  const activeText = active === 0 ? 'nenhum ativo' : active === 1 ? '1 ativo' : `${active} ativos`;
+  return `${n === 1 ? '1 agendamento' : `${n} agendamentos`} · ${activeText}`;
+}
+
 function nextText(schedule, nextRuns, timeZone, now) {
-  if (!schedule.enabled) return 'Pausado';
+  if (!schedule.enabled) return 'Próximo: —';
   if (!(schedule.id in nextRuns)) return '';
   const next = nextRuns[schedule.id];
   return next ? `Próximo: <strong>${escape(formatWhen(next, { timeZone, now }))}</strong>` : 'Nenhum envio previsto';
 }
 
-function scheduleRow(s, { messages, nextRuns, timeZone, now }) {
+// Pausado é escolha do usuário e vence; depois vem o resultado do último
+// envio; senão, ativo.
+function statusBadge(schedule, last) {
+  if (!schedule.enabled) return badge('paused', 'Pausado');
+  if (last?.failed > 0) return badge('error', 'Falha no envio');
+  return badge('active', 'Ativo');
+}
+
+const MAX_GROUP_NAMES = 4;
+
+function groupsText(groups, groupName) {
+  if (groups.length === 0) return 'Nenhum grupo';
+  const names = groups.slice(0, MAX_GROUP_NAMES).map((id) => groupName(id));
+  const rest = groups.length - names.length;
+  return `${plural(groups.length, 'grupo', 'grupos')} · ${escape(names.join(', '))}${rest > 0 ? ` e mais ${rest}` : ''}`;
+}
+
+function failureLine(last, timeZone, now) {
+  if (!last || last.failed === 0) return '';
+  const error = last.entries.find((e) => e.status === 'error')?.error ?? 'falha sem detalhe';
+  return `<div class="card-failure">${icon('alert')} Último envio falhou · ${escape(error)} · ${escape(formatWhen(last.startedAt, { timeZone, now }))}</div>`;
+}
+
+function scheduleCard(s, index, { messages, nextRuns, timeZone, now, groupName, lastDispatches }) {
   const when = describeCron(s.cron);
   const message = messages.find((m) => m.id === s.messageId);
+  const last = lastDispatches[s.name];
   const id = escape(s.id);
   const name = escape(s.name);
+  const classes = ['card', 'schedule-card', s.enabled ? '' : 'is-paused', s.enabled && last?.failed > 0 ? 'has-failure' : '']
+    .filter(Boolean).join(' ');
   return `
-    <li class="row schedule-row${s.enabled ? '' : ' is-paused'}">
+    <li class="${classes}" style="--i: ${Math.min(index, 8)}">
       <button type="button" class="switch" role="switch" aria-checked="${s.enabled}" data-action="toggle" data-id="${id}"
         aria-label="${s.enabled ? 'Pausar' : 'Ativar'} ${name}" title="${s.enabled ? 'Ativo: clique para pausar' : 'Pausado: clique para ativar'}"></button>
-      <div class="row-main">
-        <button type="button" class="row-title" data-action="edit" data-id="${id}">${name}</button>
-        <div class="row-sub">${when ? escape(when) : `<code>${escape(s.cron)}</code>`} · ${escape(message?.name ?? 'mensagem não encontrada')}</div>
+      <div class="card-main">
+        <div class="card-title-row">
+          <button type="button" class="card-title" data-action="edit" data-id="${id}">${name}</button>
+          ${statusBadge(s, last)}
+        </div>
+        <div class="card-sub">${when ? escape(when) : `<code>${escape(s.cron)}</code>`} · ${escape(message?.name ?? 'mensagem não encontrada')}</div>
+        <div class="card-meta">${nextText(s, nextRuns, timeZone, now)}</div>
+        <div class="card-sub">${groupsText(s.groups, groupName)}</div>
+        ${failureLine(last, timeZone, now)}
       </div>
-      <div class="row-next">${nextText(s, nextRuns, timeZone, now)}</div>
-      <div class="row-count">${plural(s.groups.length, 'grupo', 'grupos')}</div>
-      <div class="row-actions">
-        <button type="button" class="btn btn-danger-outline btn-sm" data-action="run" data-id="${id}">${icon('send')} Enviar agora</button>
+      <div class="card-actions">
+        <button type="button" class="btn btn-sm" data-action="run" data-id="${id}">${icon('send')} Enviar agora</button>
         <details class="menu">
           <summary class="icon-btn" aria-label="Mais ações para ${name}">${icon('ellipsis')}</summary>
           <div class="menu-items">
@@ -63,12 +106,15 @@ function scheduleRow(s, { messages, nextRuns, timeZone, now }) {
 }
 
 /**
- * HTML da lista de agendamentos.
+ * HTML da lista de agendamentos, um card por agendamento.
  * @param {{schedules: object[], messages: object[], nextRuns?: Record<string, string|null>,
- *          timeZone?: string, now?: number}} input nextRuns: de GET /api/status.
+ *          timeZone?: string, now?: number, groupName?: (id: string) => string,
+ *          lastDispatches?: Record<string, object>}} input
+ *   nextRuns: de GET /api/status. lastDispatches: de lastDispatchByName, para
+ *   o badge "Falha no envio" e a linha do último envio falho.
  * @returns {string}
  */
-export function scheduleList({ schedules, messages, nextRuns = {}, timeZone, now }) {
+export function scheduleList({ schedules, messages, nextRuns = {}, timeZone, now, groupName = (id) => id, lastDispatches = {} }) {
   if (schedules.length === 0) {
     return `
       <div class="empty">
@@ -77,7 +123,8 @@ export function scheduleList({ schedules, messages, nextRuns = {}, timeZone, now
         <button type="button" class="btn" data-action="new-schedule">${icon('plus')} Novo agendamento</button>
       </div>`;
   }
-  return `<ul class="rows">${schedules.map((s) => scheduleRow(s, { messages, nextRuns, timeZone, now })).join('')}</ul>`;
+  const context = { messages, nextRuns, timeZone, now, groupName, lastDispatches };
+  return `<ul class="cards">${schedules.map((s, index) => scheduleCard(s, index, context)).join('')}</ul>`;
 }
 
 // Bloco do formulário com título e, à direita, um complemento opcional (link

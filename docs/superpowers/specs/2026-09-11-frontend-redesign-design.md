@@ -3,6 +3,12 @@
 Data: 2026-09-11
 Status: aprovado e implementado
 
+> Visual atualizado em 2026-09-11 pelo design system em
+> `docs/design/waha-scheduler-design-system.html`: só tema escuro, Geist e
+> Geist Mono embutidas, verde dessaturado para estado, cards com badge de
+> estado e nomes dos grupos. As decisões R2 e R3 e a seção "Visual" abaixo
+> descrevem a versão anterior; o design system é a referência atual.
+
 ## Contexto
 
 A tela de agendamentos existe desde o design de 2026-09-06

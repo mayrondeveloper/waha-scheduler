@@ -3,8 +3,22 @@
 import { escape, icon } from './html.js';
 import { formatWhen, formatTime } from './dates.js';
 
+/**
+ * Subtítulo do cabeçalho da aba: "5 disparos · 1 com falha".
+ * @param {object[]} dispatches Saída de groupDispatches.
+ * @returns {string}
+ */
+export function historySubtitle(dispatches) {
+  const n = dispatches.length;
+  if (n === 0) return 'Nenhum disparo';
+  const failed = dispatches.filter((d) => d.failed > 0).length;
+  const base = n === 1 ? '1 disparo' : `${n} disparos`;
+  return failed > 0 ? `${base} · ${failed} com falha` : base;
+}
+
 function dispatchItem(d, { groupName, timeZone, now }) {
   const total = d.entries.length;
+  const groups = [...new Set(d.entries.map((e) => groupName(e.chatId)))].join(' · ');
   const entries = d.entries.map((e) => `
     <li class="${e.status === 'error' ? 'text-danger' : ''}">
       ${icon(e.status === 'error' ? 'x' : 'check')}
@@ -17,9 +31,12 @@ function dispatchItem(d, { groupName, timeZone, now }) {
       <details class="dispatch${d.failed ? ' has-failure' : ''}"${d.failed ? ' open' : ''}>
         <summary class="row dispatch-row">
           <span class="dispatch-icon ${d.failed ? 'tone-danger' : 'tone-ok'}">${icon(d.failed ? 'alert' : 'circleCheck')}</span>
-          <span class="row-main"><span class="row-title-text">${escape(d.name)}</span>${d.manual ? '<span class="tag">manual</span>' : ''}</span>
-          <span class="dispatch-count ${d.failed ? 'text-danger' : 'row-sub'}">${d.sent} de ${total} ${total === 1 ? 'grupo' : 'grupos'}</span>
-          <span class="dispatch-when row-sub">${escape(formatWhen(d.startedAt, { timeZone, now }))}</span>
+          <span class="row-main">
+            <span class="row-title-text">${escape(d.name)}</span>${d.manual ? '<span class="tag">manual</span>' : ''}
+            <span class="dispatch-groups">${escape(groups)}</span>
+          </span>
+          <span class="dispatch-when">${escape(formatWhen(d.startedAt, { timeZone, now }))}</span>
+          <span class="dispatch-count${d.failed ? ' is-failed' : ''}">${d.sent}/${total} enviados</span>
           <span class="chevron">${icon('chevronDown')}</span>
         </summary>
         <ul class="dispatch-entries">${entries}</ul>

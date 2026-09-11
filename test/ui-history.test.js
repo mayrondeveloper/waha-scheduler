@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupDispatches } from '../public/history.js';
+import { groupDispatches, lastDispatchByName } from '../public/history.js';
 
 const at = (seconds) => new Date(Date.parse('2026-09-11T12:00:00Z') + seconds * 1000).toISOString();
 const entry = (seconds, label, chatId, status = 'sent', error) =>
@@ -52,4 +52,19 @@ test('envio pelo terminal tem nome legível', () => {
 
 test('log vazio não tem disparos', () => {
   assert.deepEqual(groupDispatches([]), []);
+});
+
+// O card do agendamento mostra "Falha no envio" a partir do último disparo
+// dele, seja do cron ou do "Enviar agora".
+test('o último disparo de cada agendamento, pelo nome', () => {
+  const last = lastDispatchByName(groupDispatches(newestFirst(
+    entry(0, 'bom-dia', 'a@g.us'),
+    entry(3600, 'bom-dia (manual)', 'a@g.us', 'error', 'Erro 500'),
+    entry(7200, 'boa-noite', 'a@g.us'),
+  )));
+  assert.equal(last['bom-dia'].failed, 1, 'o envio manual mais recente conta como último envio');
+  assert.equal(last['bom-dia'].manual, true);
+  assert.equal(last['boa-noite'].failed, 0);
+  assert.equal(last.outro, undefined);
+  assert.deepEqual(lastDispatchByName([]), {});
 });

@@ -73,6 +73,17 @@ export function emojiPanel({ active, recents }) {
 }
 
 /**
+ * Subtítulo do cabeçalho da aba: "2 mensagens".
+ * @param {object[]} messages
+ * @returns {string}
+ */
+export function messagesSubtitle(messages) {
+  const n = messages.length;
+  if (n === 0) return 'Nenhuma mensagem';
+  return n === 1 ? '1 mensagem' : `${n} mensagens`;
+}
+
+/**
  * HTML da lista de mensagens.
  * @param {{messages: object[], schedules: object[]}} input
  * @returns {string}

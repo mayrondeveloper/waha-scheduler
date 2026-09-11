@@ -47,3 +47,15 @@ export function groupDispatches(logs) {
     };
   });
 }
+
+/**
+ * O último disparo de cada agendamento, pelo nome exibido (sem o sufixo
+ * "(manual)"): é o que decide o badge "Falha no envio" do card.
+ * @param {ReturnType<typeof groupDispatches>} dispatches Do mais recente para o mais antigo.
+ * @returns {Record<string, object>}
+ */
+export function lastDispatchByName(dispatches) {
+  const last = {};
+  for (const d of dispatches) if (!Object.hasOwn(last, d.name)) last[d.name] = d;
+  return last;
+}

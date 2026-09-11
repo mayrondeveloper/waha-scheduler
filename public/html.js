@@ -13,6 +13,32 @@ export function escape(value) {
   );
 }
 
+/**
+ * Badge de status do design system: ponto e texto, com a cor do estado.
+ * @param {'active'|'paused'|'error'|'waiting'} tone
+ * @param {string} text
+ * @returns {string}
+ */
+export function badge(tone, text) {
+  return `<span class="badge tone-${tone}"><span class="dot" aria-hidden="true"></span>${escape(text)}</span>`;
+}
+
+/**
+ * Cabeçalho de uma aba: título, subtítulo com contagem e a ação principal.
+ * @param {{title: string, subtitle?: string, action?: string}} input action: HTML já montado.
+ * @returns {string}
+ */
+export function pageHeader({ title, subtitle = '', action = '' }) {
+  return `
+    <div class="page-head">
+      <div>
+        <h2 class="page-title">${escape(title)}</h2>
+        ${subtitle ? `<p class="page-sub">${escape(subtitle)}</p>` : ''}
+      </div>
+      ${action ? `<div class="page-action">${action}</div>` : ''}
+    </div>`;
+}
+
 // Desenhos do Lucide (https://lucide.dev), sob a licença ISC:
 //
 // Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as

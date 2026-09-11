@@ -88,3 +88,14 @@ test('nome de agendamento na faixa é escapado', () => {
   });
   assert.doesNotMatch(html, /<img/);
 });
+
+// O ponto pulsante é o "indicador de vida do sistema" do design system: só
+// o agendador rodando pulsa. WAHA conectado e os estados de erro ficam parados.
+test('o ponto do agendador pulsa só quando ele está rodando', () => {
+  const bar = (scheduler) => statusBar({
+    status: status(scheduler), statusError: null, groupsError: null, groupsLoaded: true, schedules: ACTIVE, now: NOW,
+  });
+  assert.match(bar({}), /status-item tone-ok is-live/);
+  assert.equal(bar({}).match(/is-live/g).length, 1, 'só o item do agendador pulsa');
+  assert.doesNotMatch(bar({ state: 'stopped' }), /is-live/);
+});

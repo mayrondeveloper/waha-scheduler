@@ -3,17 +3,18 @@
 // os testes importam e chamam as funções com um document de mentira.
 
 import { api } from './api.js';
-import { escape, icon } from './html.js';
+import { escape, icon, pageHeader } from './html.js';
 import { formatWhen } from './dates.js';
 import { formatWhatsApp, toggleInline, toggleMonospace, toggleLinePrefix, insertText } from './whatsapp.js';
 import { recentEmojis, rememberEmoji } from './emoji.js';
-import { groupDispatches } from './history.js';
+import { groupDispatches, lastDispatchByName } from './history.js';
 import { statusBar } from './status-view.js';
 import {
   scheduleList, scheduleForm, formCron, formGroups, searchKey, selectedCountLabel, sendConfirm, sendResult,
+  schedulesSubtitle,
 } from './schedules-view.js';
-import { messageList, messageForm, emojiPanel } from './messages-view.js';
-import { historyView } from './history-view.js';
+import { messageList, messageForm, emojiPanel, messagesSubtitle } from './messages-view.js';
+import { historyView, historySubtitle } from './history-view.js';
 
 const STATUS_POLL_MS = 15_000;
 const LOG_LIMIT = 500;
@@ -84,6 +85,9 @@ async function loadGroups() {
   }
   state.groupsLoaded = true;
   renderStatus();
+  // Os cards e o histórico mostram os grupos pelo nome: redesenha a aba
+  // agora que a lista chegou.
+  renderTab();
   // O painel pode ter aberto antes da lista chegar, com o campo de ids
   // digitados. Se ninguém mexeu nele ainda, troca pela lista de grupos.
   if (state.editing?.type === 'schedule' && drawer().open && !isDirty()) renderScheduleDrawer({ fresh: true });
@@ -144,17 +148,37 @@ function renderTabs() {
     else button.removeAttribute('aria-current');
   });
   for (const id of TABS) $(`#${id}`).hidden = id !== state.tab;
+}
 
-  const primary = {
+const TAB_TITLES = { schedules: 'Agendamentos', messages: 'Mensagens', history: 'Histórico' };
+
+function primaryAction() {
+  const action = {
     schedules: ['new-schedule', 'Novo agendamento'],
     messages: ['new-message', 'Nova mensagem'],
   }[state.tab];
-  $('#primary-action').innerHTML = primary
-    ? `<button type="button" class="btn btn-primary" data-action="${primary[0]}">${icon('plus')} ${primary[1]}</button>`
+  return action
+    ? `<button type="button" class="btn btn-primary" data-action="${action[0]}">${icon('plus')} ${action[1]}</button>`
     : '';
 }
 
+function pageSubtitle() {
+  if (state.tab === 'schedules') return schedulesSubtitle(state.schedules);
+  if (state.tab === 'messages') return messagesSubtitle(state.messages);
+  return historySubtitle(groupDispatches(state.logs));
+}
+
+// O cabeçalho conta os itens, então acompanha toda redesenho da aba.
+function renderPageHead() {
+  $('#page-head').innerHTML = pageHeader({
+    title: TAB_TITLES[state.tab],
+    subtitle: pageSubtitle(),
+    action: primaryAction(),
+  });
+}
+
 function renderTab() {
+  renderPageHead();
   if (state.tab === 'schedules') {
     $('#schedules').innerHTML = scheduleList({
       schedules: state.schedules,
@@ -162,6 +186,8 @@ function renderTab() {
       nextRuns: state.status?.nextRuns,
       timeZone: timeZone(),
       now: now(),
+      groupName,
+      lastDispatches: lastDispatchByName(groupDispatches(state.logs)),
     });
   } else if (state.tab === 'messages') {
     $('#messages').innerHTML = messageList({ messages: state.messages, schedules: state.schedules });
@@ -471,7 +497,8 @@ async function confirmSend(button, id) {
   state.sending = true;
   button.disabled = true;
   cancel.disabled = true;
-  button.textContent = 'Enviando…';
+  button.classList.add('is-busy');
+  button.innerHTML = '<span class="spinner" aria-hidden="true"></span> Enviando…';
   hideFormError(m);
 
   let result;
@@ -480,6 +507,7 @@ async function confirmSend(button, id) {
   } catch (err) {
     button.disabled = false;
     cancel.disabled = false;
+    button.classList.remove('is-busy');
     button.innerHTML = label;
     showFormError(m, err.message);
     return;

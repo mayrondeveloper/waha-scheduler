@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   scheduleList, scheduleForm, formCron, formGroups, sendConfirm, sendResult, searchKey, selectedCountLabel,
+  schedulesSubtitle,
 } from '../public/schedules-view.js';
-import { messageList, messageEditor, emojiPanel } from '../public/messages-view.js';
-import { historyView } from '../public/history-view.js';
-import { groupDispatches } from '../public/history.js';
+import { messageList, messageEditor, emojiPanel, messagesSubtitle } from '../public/messages-view.js';
+import { historyView, historySubtitle } from '../public/history-view.js';
+import { groupDispatches, lastDispatchByName } from '../public/history.js';
+import { pageHeader } from '../public/html.js';
 import { fakeForm } from './fake-dom.js';
 
 const KNOWN_GROUP = '111111111111111111@g.us';
@@ -104,7 +106,7 @@ test('a lista mostra quando dispara por extenso e o cron personalizado cru', () 
 
 // ---------- Novos ----------
 
-test('a lista mostra o próximo envio por extenso e marca o pausado', () => {
+test('a lista mostra o próximo envio por extenso, os grupos por nome e o badge de estado', () => {
   const html = scheduleList({
     schedules: [
       { id: 'a', name: 'resumo', cron: '0 18 * * 5', messageId: 'msg-a', groups: [KNOWN_GROUP], enabled: true },
@@ -114,12 +116,55 @@ test('a lista mostra o próximo envio por extenso e marca o pausado', () => {
     nextRuns: { a: '2026-09-11T21:00:00Z' },
     timeZone: SP,
     now: NOW,
+    groupName: (id) => (id === KNOWN_GROUP ? 'Grupo Alpha' : id),
   });
   assert.match(html, /Próximo: <strong>hoje, 18:00<\/strong>/);
-  assert.match(html, /Pausado/);
+  assert.match(html, /badge tone-active/);
+  assert.match(html, /Ativo</);
+  assert.match(html, /badge tone-paused/);
+  assert.match(html, /Pausado</);
+  assert.match(html, /Próximo: —/, 'agendamento pausado não tem próximo envio');
   assert.match(html, /aria-checked="false"/);
-  assert.match(html, /2 grupos/);
-  assert.match(html, /1 grupo</);
+  assert.match(html, /2 grupos · Grupo Alpha, 2@g\.us/);
+  assert.match(html, /1 grupo · Grupo Alpha/);
+});
+
+test('agendamento cujo último envio falhou ganha o badge e a linha da falha', () => {
+  const dispatches = groupDispatches([
+    { ts: '2026-09-11T12:00:13Z', status: 'error', chatId: '2@g.us', label: 'ofertas', error: 'Erro 500 ao enviar' },
+    { ts: '2026-09-11T12:00:02Z', status: 'sent', chatId: KNOWN_GROUP, label: 'ofertas' },
+  ]);
+  const html = scheduleList({
+    schedules: [{ id: 'a', name: 'ofertas', cron: '0 9 * * 1-5', messageId: 'msg-a', groups: [KNOWN_GROUP, '2@g.us'], enabled: true }],
+    messages: MESSAGES,
+    nextRuns: { a: '2026-09-14T12:00:00Z' },
+    timeZone: SP,
+    now: NOW,
+    lastDispatches: lastDispatchByName(dispatches),
+  });
+  assert.match(html, /badge tone-error/);
+  assert.match(html, /Falha no envio</);
+  assert.match(html, /Último envio falhou · Erro 500 ao enviar · hoje, 09:00/);
+  assert.doesNotMatch(html, /Ativo</);
+});
+
+test('cabeçalho da aba: título, contagem e ação', () => {
+  const html = pageHeader({ title: 'Agendamentos', subtitle: '3 agendamentos · 1 ativo', action: '<button>Novo</button>' });
+  assert.match(html, /<h2 class="page-title">Agendamentos<\/h2>/);
+  assert.match(html, /3 agendamentos · 1 ativo/);
+  assert.match(html, /<button>Novo<\/button>/);
+  assert.doesNotMatch(pageHeader({ title: '<b>x</b>', subtitle: '<i>y</i>' }), /<b>|<i>/, 'título e subtítulo são escapados');
+
+  assert.equal(schedulesSubtitle([{ enabled: true }, { enabled: false }, { enabled: true }]), '3 agendamentos · 2 ativos');
+  assert.equal(schedulesSubtitle([{ enabled: false }]), '1 agendamento · nenhum ativo');
+  assert.equal(schedulesSubtitle([{ enabled: true }]), '1 agendamento · 1 ativo');
+  assert.equal(schedulesSubtitle([]), 'Nenhum agendamento');
+  assert.equal(messagesSubtitle([{}, {}]), '2 mensagens');
+  assert.equal(messagesSubtitle([{}]), '1 mensagem');
+  assert.equal(messagesSubtitle([]), 'Nenhuma mensagem');
+  assert.equal(historySubtitle([{ failed: 0 }, { failed: 2 }]), '2 disparos · 1 com falha');
+  assert.equal(historySubtitle([{ failed: 0 }]), '1 disparo');
+  assert.equal(historySubtitle([]), 'Nenhum disparo');
 });
 
 test('lista vazia convida a criar o primeiro agendamento', () => {
@@ -229,7 +274,8 @@ test('histórico: disparo com falha já vem aberto, com o erro de cada grupo', (
     now: NOW,
   });
   assert.equal(html.match(/ open>/g).length, 1, 'só o disparo com falha abre sozinho');
-  assert.match(html, /1 de 2 grupos/);
+  assert.match(html, /1\/2 enviados/);
+  assert.match(html, /1\/1 enviados/);
   assert.match(html, /2@g\.us: sessão desconectada/);
   assert.match(html, /class="tag">manual</);
 });
