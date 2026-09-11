@@ -185,6 +185,59 @@ test('salvar sem dia marcado não chama a API e explica no painel', async () => 
   assert.equal($('#drawer').querySelector('.form-error').textContent, 'Selecione ao menos um dia da semana e o horário.');
 });
 
+// ---------- Anexos ----------
+
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const MEDIA = { id: 'med-1', filename: 'foto.png', mimetype: 'image/png', size: 68, kind: 'image' };
+const messageForm = () => fakeForm('<form id="form-message"><input type="text" name="name" value="Foto" /><textarea name="text">Olá</textarea></form>');
+
+function messageRoutes() {
+  return routedFetch({
+    'POST /api/messages': (body) => [201, { id: 'msg-b', ...body }],
+    'PUT /api/messages/msg-a': (body) => [200, { id: 'msg-a', ...body }],
+    'GET /api/schedules': () => [200, []],
+    'GET /api/messages': () => [200, []],
+    'GET /api/status': statusBody,
+  });
+}
+
+test('salvar mensagem com anexo pendente manda o arquivo em base64', async () => {
+  const { fetch, calls } = messageRoutes();
+  installDom(fetch);
+  resetState();
+  app.openMessageEditor();
+  app.state.editing.media = { current: null, pending: { filename: 'foto.png', mimetype: 'image/png', size: 68, kind: 'image', data: PNG, src: 'blob:x' } };
+
+  await app.handleSubmit({ target: messageForm(), preventDefault() {} });
+
+  const sent = calls.find((c) => c.method === 'POST').body;
+  assert.deepEqual(sent.media, { filename: 'foto.png', mimetype: 'image/png', data: PNG });
+});
+
+test('editar mensagem com anexo sem mexer manda media: { id }', async () => {
+  const { fetch, calls } = messageRoutes();
+  installDom(fetch);
+  resetState({ messages: [{ id: 'msg-a', name: 'Foto', text: 'Olá', media: MEDIA }] });
+  app.openMessageEditor('msg-a');
+
+  await app.handleSubmit({ target: messageForm(), preventDefault() {} });
+
+  assert.deepEqual(calls.find((c) => c.method === 'PUT').body.media, { id: 'med-1' });
+});
+
+test('remover o anexo manda a mensagem sem media', async () => {
+  const { fetch, calls } = messageRoutes();
+  installDom(fetch);
+  resetState({ messages: [{ id: 'msg-a', name: 'Foto', text: 'Olá', media: MEDIA }] });
+  app.openMessageEditor('msg-a');
+
+  const button = { dataset: { action: 'remove-media' }, disabled: false, closest: () => null };
+  app.handleClick({ target: { closest: (selector) => (selector === '[data-action]' ? button : null) } });
+  await app.handleSubmit({ target: messageForm(), preventDefault() {} });
+
+  assert.equal('media' in calls.find((c) => c.method === 'PUT').body, false);
+});
+
 test('salvar mensagem manda nome e texto crus, com os marcadores', async () => {
   const { fetch, calls } = routedFetch({
     'POST /api/messages': (body) => [201, { id: 'msg-b', ...body }],

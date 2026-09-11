@@ -5,7 +5,9 @@ import { escape, icon, badge } from './html.js';
 import { WEEKDAYS, buildCron, parseCron, describeCron } from './cron.js';
 import { formatWhen } from './dates.js';
 import { formatWhatsApp } from './whatsapp.js';
-import { messageEditor } from './messages-view.js';
+import { messageEditor, bubbleContent } from './messages-view.js';
+
+const mediaSrcFor = (media) => (media ? `/api/media/${encodeURIComponent(media.id)}` : '');
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
@@ -174,13 +176,13 @@ function whenSection(schedule, timezoneLabel) {
       ${preview}`);
 }
 
-function messageSection(schedule, messages, composing) {
+function messageSection(schedule, messages, composing, media, mediaSrc) {
   if (composing || messages.length === 0) {
     const pick = messages.length > 0
       ? '<button type="button" class="link" data-action="pick-message">Escolher uma existente</button>'
       : '';
     return fieldGroup('label-message', 'Mensagem', pick,
-      messageEditor({ nameField: 'messageName', textField: 'messageText', name: schedule.name ?? '' }));
+      messageEditor({ nameField: 'messageName', textField: 'messageText', name: schedule.name ?? '', media, mediaSrc }));
   }
 
   const selected = messages.find((m) => m.id === schedule.messageId) ?? messages[0];
@@ -188,9 +190,10 @@ function messageSection(schedule, messages, composing) {
     .map((m) => `<option value="${escape(m.id)}" ${m.id === selected.id ? 'selected' : ''}>${escape(m.name)}</option>`)
     .join('');
   const compose = `<button type="button" class="link" data-action="compose-message">${icon('plus')} Escrever nova</button>`;
+  const preview = bubbleContent({ text: selected.text, media: selected.media ?? null, mediaSrc: mediaSrcFor(selected.media) });
   return fieldGroup('label-message', 'Mensagem', compose, `
       <select name="messageId" required aria-labelledby="label-message">${options}</select>
-      <div class="chat"><div class="bubble" id="message-preview">${formatWhatsApp(selected.text)}</div></div>`);
+      <div class="chat"><div class="bubble" id="message-preview">${preview}</div></div>`);
 }
 
 function groupsSection(saved, groups, groupsError) {
@@ -234,9 +237,12 @@ function groupsSection(saved, groups, groupsError) {
  *   schedule: o agendamento em edição (sem id quando é novo).
  *   groups: lista do WAHA; vazia quando ela não chegou.
  *   composing: true mostra o editor de mensagem nova no lugar da seleção.
+ *   media/mediaSrc: anexo da mensagem nova em edição e a URL da prévia.
  * @returns {string}
  */
-export function scheduleForm({ schedule, messages, groups, groupsError = null, composing = false, timezoneLabel = '' }) {
+export function scheduleForm({
+  schedule, messages, groups, groupsError = null, composing = false, timezoneLabel = '', media = null, mediaSrc = '',
+}) {
   return `
     <form id="form-schedule" class="drawer-form" novalidate>
       <header class="drawer-header">
@@ -249,7 +255,7 @@ export function scheduleForm({ schedule, messages, groups, groupsError = null, c
           <input type="text" name="name" value="${escape(schedule.name ?? '')}" required autocomplete="off" />
         </label>
         ${whenSection(schedule, timezoneLabel)}
-        ${messageSection(schedule, messages, composing)}
+        ${messageSection(schedule, messages, composing, media, mediaSrc)}
         ${groupsSection(schedule.groups ?? [], groups, groupsError)}
       </div>
       <footer class="drawer-footer">
@@ -298,7 +304,9 @@ export function sendConfirm({ schedule, message, groupName }) {
     <div class="modal-box">
       <h2 id="modal-title">Enviar "${escape(schedule.name)}" agora?</h2>
       <p class="modal-text">A mensagem vai de verdade para ${count === 1 ? 'o grupo abaixo' : 'os grupos abaixo'}, fora do horário agendado.</p>
-      <div class="chat"><div class="bubble">${message ? formatWhatsApp(message.text) : '<span class="muted">Mensagem não encontrada.</span>'}</div></div>
+      <div class="chat"><div class="bubble">${message
+        ? bubbleContent({ text: message.text, media: message.media ?? null, mediaSrc: mediaSrcFor(message.media) })
+        : '<span class="muted">Mensagem não encontrada.</span>'}</div></div>
       <ul class="chips">${schedule.groups.map((id) => `<li class="chip">${escape(groupName(id))}</li>`).join('')}</ul>
       <p class="form-error" role="alert" hidden></p>
       <div class="modal-actions">

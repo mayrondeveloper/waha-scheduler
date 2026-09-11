@@ -4,6 +4,7 @@
 import { escape, icon } from './html.js';
 import { formatWhatsApp } from './whatsapp.js';
 import { EMOJI_CATEGORIES } from './emoji.js';
+import { mediaPreview, mediaChip, mediaStrip } from './media.js';
 
 const EMPTY_PREVIEW = '<span class="muted">A prévia aparece aqui.</span>';
 
@@ -19,15 +20,28 @@ const FORMAT_BUTTONS = [
   { format: 'quote', icon: 'quote', label: 'Citação' },
   null,
   { format: 'emoji', icon: 'smile', label: 'Emojis' },
+  { format: 'attach', icon: 'paperclip', label: 'Anexar imagem, vídeo, áudio ou arquivo' },
 ];
 
 /**
- * HTML do editor de mensagem: nome, barra de formatação, texto cru e prévia.
- * @param {{nameField: string, textField: string, name?: string, text?: string}} input
- *   nameField/textField: atributos "name" dos campos no formulário.
+ * Conteúdo do balão de prévia: o anexo (se houver) e o texto formatado.
+ * @param {{text: string, media?: object|null, mediaSrc?: string}} input
  * @returns {string}
  */
-export function messageEditor({ nameField, textField, name = '', text = '' }) {
+export function bubbleContent({ text, media = null, mediaSrc = '' }) {
+  const body = text.trim() ? formatWhatsApp(text) : (media ? '' : EMPTY_PREVIEW);
+  return `${media ? mediaPreview(media, mediaSrc) : ''}${body}`;
+}
+
+/**
+ * HTML do editor de mensagem: nome, barra de formatação, texto cru, anexo e prévia.
+ * @param {{nameField: string, textField: string, name?: string, text?: string,
+ *          media?: object|null, mediaSrc?: string}} input
+ *   nameField/textField: atributos "name" dos campos no formulário.
+ *   media/mediaSrc: o anexo atual e a URL de onde a tela o mostra.
+ * @returns {string}
+ */
+export function messageEditor({ nameField, textField, name = '', text = '', media = null, mediaSrc = '' }) {
   const toolbar = FORMAT_BUTTONS.map((button) => (button
     ? `<button type="button" class="tool" data-format="${button.format}" title="${escape(button.label)}" aria-label="${escape(button.label)}">${icon(button.icon)}</button>`
     : '<span class="tool-sep" aria-hidden="true"></span>')).join('');
@@ -43,11 +57,13 @@ export function messageEditor({ nameField, textField, name = '', text = '' }) {
           <div class="toolbar" role="toolbar" aria-label="Formatação">${toolbar}</div>
           <textarea name="${textField}" data-editor rows="9" required aria-label="Texto da mensagem"
             placeholder="Bom dia! *Ofertas de hoje* 📚">${escape(text)}</textarea>
+          <input type="file" data-role="media-file" hidden tabindex="-1" aria-hidden="true" />
+          <div class="media-strip" data-role="media-strip">${media ? mediaStrip(media, mediaSrc) : ''}</div>
           <div class="emoji-panel" data-role="emoji-panel" hidden></div>
         </div>
         <div class="editor-preview">
           <p class="hint">Como chega no grupo</p>
-          <div class="chat"><div class="bubble" data-role="editor-preview">${text.trim() ? formatWhatsApp(text) : EMPTY_PREVIEW}</div></div>
+          <div class="chat"><div class="bubble" data-role="editor-preview">${bubbleContent({ text, media, mediaSrc })}</div></div>
         </div>
       </div>
     </div>`;
@@ -106,6 +122,7 @@ export function messageList({ messages, schedules }) {
         <div class="row-main">
           <button type="button" class="row-title" data-action="edit-message" data-id="${id}">${escape(m.name)}</button>
           <div class="message-snippet">${formatWhatsApp(m.text)}</div>
+          ${m.media ? mediaChip(m.media) : ''}
         </div>
         <div class="row-sub">${usedBy.length ? `Usada por ${escape(usedBy.join(', '))}` : 'Não usada'}</div>
         <div class="row-actions">
@@ -131,7 +148,14 @@ export function messageForm({ message }) {
         <button type="button" class="icon-btn" data-action="close-drawer" aria-label="Fechar">${icon('x')}</button>
       </header>
       <div class="drawer-body">
-        ${messageEditor({ nameField: 'name', textField: 'text', name: message.name ?? '', text: message.text ?? '' })}
+        ${messageEditor({
+          nameField: 'name',
+          textField: 'text',
+          name: message.name ?? '',
+          text: message.text ?? '',
+          media: message.media ?? null,
+          mediaSrc: message.media ? `/api/media/${encodeURIComponent(message.media.id)}` : '',
+        })}
       </div>
       <footer class="drawer-footer">
         <p class="form-error" role="alert" hidden></p>
