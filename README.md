@@ -100,6 +100,19 @@ cron sozinho (Seg, Qua e Sex às 09:00 viram `0 9 * * 1,3,5`). Um cron editado
 à mão que não cabe nesse formato aparece cru no formulário e é mantido como
 está ao salvar.
 
+No topo, uma faixa mostra se o agendador (`npm start`) está rodando, se o
+WAHA respondeu e qual é o próximo envio. É ela que avisa quando um agendamento
+não vai sair porque o agendador está parado. O agendador grava um sinal de vida
+a cada 15 segundos em `scheduler-status.json`, na mesma pasta do arquivo de
+agendamentos; sem sinal há mais de 45 segundos, a tela mostra que ele parou de
+responder. Todas as datas da tela seguem o fuso de `TIMEZONE`.
+
+As mensagens aceitam a formatação do WhatsApp (`*negrito*`, `_itálico_`,
+`~tachado~`, `` `código` ``, bloco entre três crases, listas com `-` ou `1.` e
+citação com `>`) e emojis, pela barra do editor. O texto é guardado e enviado
+cru, com os marcadores; a prévia ao lado mostra como ele chega no grupo. Um
+agendamento novo pode ter a mensagem escrita ali mesmo, em "Escrever nova".
+
 A tela escuta **apenas em localhost** — não é alcançável pela rede local nem
 pela internet, e por isso não tem senha. Não existe variável de ambiente para
 mudar isso: o host é sempre `127.0.0.1`, sem escotilha por env (não há
@@ -132,7 +145,7 @@ Além do bind em localhost, a tela tem outras defesas que valem conhecer:
 - O corpo da requisição tem tamanho limitado; acima do limite a tela responde
   `413`.
 
-O botão "Disparar agora" envia mensagem de verdade quando há um WAHA real
+O botão "Enviar agora" envia mensagem de verdade quando há um WAHA real
 configurado — e funciona mesmo com o agendamento desligado: é uma ação manual
 e explícita, com confirmação antes de enviar, pensada para testar um
 agendamento antes de ligá-lo. Isso diverge do cron, que pula os agendamentos
@@ -237,10 +250,11 @@ src/waha/client.js   Cliente HTTP do WAHA (único ponto de rede)
 src/broadcast.js     Envio para vários grupos, resiliente a falhas
 src/schedules.js     Leitura e validação do schedules.json
 src/index.js         Processo do agendador
+src/scheduler-status.js  Status do agendador, lido pela tela
 src/ui/server.js     Servidor HTTP da tela (127.0.0.1)
 src/ui/store.js      Leitura e escrita atômica do schedules.json
-src/ui/routes/       Rotas de mensagens, agendamentos e ações
-public/              A tela (HTML, CSS e JS vanilla)
+src/ui/routes/       Rotas de mensagens, agendamentos, ações e status
+public/              A tela (HTML, CSS e módulos JS nativos, sem build)
 data/                Seus agendamentos (fora do versionamento)
 harness/             Mock do WAHA e validação por fase
 ```

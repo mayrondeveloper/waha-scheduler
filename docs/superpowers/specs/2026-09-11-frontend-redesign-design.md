@@ -1,7 +1,7 @@
 # Redesign da tela de agendamentos — design
 
 Data: 2026-09-11
-Status: em revisão pelo usuário
+Status: aprovado e implementado
 
 ## Contexto
 
@@ -244,8 +244,8 @@ para a faixa de status. A variável `groupsWarningActive` do `app.js` atual some
   falha, grupo não encontrado), âmbar (atenção: WAHA indisponível, recarga
   recusada).
 - Fonte do sistema (`system-ui`).
-- Ícones: cerca de 20 SVGs do Tabler Icons (licença MIT, aviso no arquivo),
-  embutidos em `html.js`.
+- Ícones: 19 SVGs do Lucide (licença ISC, aviso no arquivo), embutidos em
+  `html.js`.
 
 ## Arquitetura
 
@@ -268,6 +268,7 @@ Todos em `public/`, carregados por `<script type="module" src="/main.js">` e
 | `schedules-view.js` | lista de agendamentos, painel, `formCron(form)`, `formGroups(form)` | só gera HTML e lê o form recebido |
 | `messages-view.js` | lista de mensagens e editor | só gera HTML |
 | `history-view.js` | histórico agrupado e filtros | só gera HTML |
+| `status-view.js` | faixa de status: aviso do agendador, WAHA e próximo envio | só gera HTML |
 
 Nenhum módulo executa nada ao ser importado, exceto `main.js`. Com isso, os
 módulos de lógica e de HTML são importados direto pelos testes em Node, e o
@@ -293,8 +294,8 @@ Módulo novo `src/scheduler-status.js`:
   precisa de env nova, e os testes que já apontam `SCHEDULES_PATH` para uma
   pasta temporária ganham o status na mesma pasta.
 - `writeStatus(path, status)`: escrita atômica (arquivo `.tmp` e `rename`).
-- `readStatus(path)`: devolve o objeto ou `null` se o arquivo não existe ou não
-  é JSON válido.
+- `readStatus(path)`: devolve o objeto, ou `null` se o arquivo não existe. JSON
+  inválido lança erro com o caminho; a rota loga e mostra o agendador como parado.
 - `schedulerState(status, now)`: `'running'` se `beatAt` tem menos de 45 s,
   `'unresponsive'` se é mais antigo, `'stopped'` se não há status.
 
@@ -435,11 +436,12 @@ Fechamento: `npm test` e depois `node harness/run.js all`.
 | `public/index.html` | Reescrito: faixa de status, abas, seções, `<dialog>` do painel e do modal, região de avisos |
 | `public/style.css` | Reescrito com a paleta neutra, claro e escuro |
 | `public/app.js` | Reescrito como orquestrador; a lógica pura sai para os módulos |
-| `public/*.js` (novos) | `main`, `api`, `html`, `cron`, `dates`, `whatsapp`, `emoji`, `history`, `schedules-view`, `messages-view`, `history-view` |
+| `public/*.js` (novos) | `main`, `api`, `html`, `cron`, `dates`, `whatsapp`, `emoji`, `history`, `status-view`, `schedules-view`, `messages-view`, `history-view` |
 | `src/ui/server.js` | Novas entradas em `STATIC_FILES` |
 | `src/ui/routes/actions.js` | `GET /api/status` |
 | `src/scheduler-status.js` (novo) | Leitura, escrita e estado do arquivo de status |
 | `src/index.js` | Sinal de vida, status atualizado na recarga, arquivo apagado ao encerrar |
+| `.gitignore` | `scheduler-status.json` fora do versionamento em qualquer pasta |
 | `test/ui-app.test.js` | Passa a importar os módulos em vez de rodar o `app.js` numa sandbox |
 | `test/` (novos) | `whatsapp`, `dates`, `history`, `scheduler-status`, status do agendador, `GET /api/status` |
 | `README.md` | Seção da tela: faixa de status, formatação e emojis |
