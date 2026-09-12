@@ -6,10 +6,30 @@ import { schedule as scheduleCron, validate as isValidCron } from 'node-cron';
 import { assertTimezone, config } from './config.js';
 import { normalizeGroups } from './broadcast.js';
 import { MEDIA_KINDS } from './media.js';
-import { isWall } from './dates.js';
+import { isWall, wallToInstant } from './dates.js';
+
+/** Atraso máximo tolerado num envio único: além disso, ele é dado como perdido. */
+export const GRACE_MS = 600_000;
 
 function fail(message) {
   throw new Error(message);
+}
+
+/**
+ * O que fazer com um envio único agora: esperar, disparar, dar como perdido
+ * (venceu há mais que a tolerância, com o agendador parado) ou nada, porque
+ * já disparou ou já foi perdido.
+ * @param {{at?: string, enabled: boolean, firedAt?: string, missedAt?: string}} schedule
+ * @param {number} nowMs Instante de referência.
+ * @param {string} timeZone Fuso do "at".
+ * @returns {'wait'|'fire'|'missed'|'done'}
+ */
+export function dueAction(schedule, nowMs, timeZone) {
+  if (!schedule.at || !schedule.enabled) return 'wait';
+  if (schedule.firedAt || schedule.missedAt) return 'done';
+  const due = wallToInstant(schedule.at, timeZone);
+  if (due > nowMs) return 'wait';
+  return nowMs - due <= GRACE_MS ? 'fire' : 'missed';
 }
 
 /**
