@@ -6,6 +6,7 @@ import { appendSendLog, info, error as logError } from './logger.js';
 import * as wahaClient from './waha/client.js';
 import { recentSends, HOUR_MS } from './send-log.js';
 import { spin } from '../public/spintax.js';
+import { rewriteLinks } from './links.js';
 
 // Limite de legenda do WhatsApp. Acima disso, o anexo vai sem legenda e o
 // texto segue em mensagem separada.
@@ -66,6 +67,23 @@ function loadMediaFile(media) {
   return { mimetype: media.mimetype, filename: media.filename, data: bytes.toString('base64') };
 }
 
+// Texto com prévia customizada do destino. Se o endpoint falhar, o texto sai
+// simples, uma tentativa só de cada: o envio nunca depende da prévia.
+async function sendWithPreview(client, chatId, text, preview, cfg) {
+  if (typeof client.sendTextWithPreview !== 'function') {
+    await client.sendText(chatId, text, cfg);
+    return 'failed';
+  }
+  try {
+    await client.sendTextWithPreview(chatId, text, preview, cfg);
+    return 'sent';
+  } catch (err) {
+    logError(`Prévia falhou para ${chatId}, enviando o texto simples: ${err.message}`);
+    await client.sendText(chatId, text, cfg);
+    return 'failed';
+  }
+}
+
 // Legenda quando o WhatsApp aceita: nunca em áudio, e só até o limite. Senão,
 // anexo primeiro e texto logo depois, sem intervalo entre os dois.
 async function sendWithMedia(client, chatId, text, file, media, cfg) {
@@ -90,18 +108,20 @@ async function sendWithMedia(client, chatId, text, file, media, cfg) {
  * @param {string[]} groups Ids dos grupos de destino.
  * @param {{client?: {sendText: Function, sendMedia?: Function}, cfg?: object, label?: string,
  *          media?: {kind: string, filename: string, mimetype: string, path: string}|null,
- *          hourlyLimit?: number, extra?: object, random?: () => number, now?: () => number,
- *          sleep?: (ms: number) => Promise<void>}} [options]
+ *          hourlyLimit?: number, extra?: object, links?: object|null, preview?: object|null,
+ *          random?: () => number, now?: () => number, sleep?: (ms: number) => Promise<void>}} [options]
  *   client: implementação injetável do WAHA (default: cliente real).
  *   media: anexo com o caminho do arquivo; o texto vira legenda quando cabe.
  *   hourlyLimit: freio por hora (0 desliga); extra: campos a mais em cada
- *   linha do log (ex.: deferredFrom); random/now/sleep: injetáveis nos testes.
+ *   linha do log (ex.: deferredFrom); links: `{ [chatId]: { [url]: shortUrl } }`
+ *   para trocar os links por grupo; preview: `{ url, title, description, image }`
+ *   do destino, usado só sem anexo; random/now/sleep: injetáveis nos testes.
  * @returns {Promise<{sent: number, failed: number, results: Array<{chatId: string, status: 'sent'|'error', error?: string}>}>}
  */
 export async function broadcast(message, groups, options = {}) {
   const {
     client = wahaClient, cfg = config, label = null, media = null, hourlyLimit = 0, extra = {},
-    random = Math.random, now = Date.now, sleep = defaultSleep,
+    links = null, preview = null, random = Math.random, now = Date.now, sleep = defaultSleep,
   } = options;
 
   const source = String(message ?? '').trim();
@@ -119,15 +139,26 @@ export async function broadcast(message, groups, options = {}) {
   const results = [];
 
   for (const [index, chatId] of targets.entries()) {
-    const text = spin(source, random);
+    // Variação sorteada e links rastreáveis deste grupo.
+    const map = links?.[chatId] ?? null;
+    const text = rewriteLinks(spin(source, random), map);
     const waitedMs = await throttle(chatId, { hourlyLimit, logPath: cfg.logPath, now, sleep });
     // O instante vem do mesmo relógio do freio: é ele que a próxima contagem lê.
     const logExtra = { ts: new Date(now()).toISOString(), ...extra, ...(waitedMs > 0 && { waitedMs }) };
     try {
-      if (file) await sendWithMedia(client, chatId, text, file, media, cfg);
-      else await client.sendText(chatId, text, cfg);
+      let previewState = null;
+      if (file) {
+        await sendWithMedia(client, chatId, text, file, media, cfg);
+      } else if (preview) {
+        // A prévia mostra o link como está no texto deste grupo (o curto, se houver).
+        previewState = await sendWithPreview(client, chatId, text, { ...preview, url: map?.[preview.url] ?? preview.url }, cfg);
+      } else {
+        await client.sendText(chatId, text, cfg);
+      }
       results.push({ chatId, status: 'sent' });
-      appendSendLog({ status: 'sent', chatId, message: text, label, ...logMedia, ...logExtra }, cfg.logPath);
+      appendSendLog({
+        status: 'sent', chatId, message: text, label, ...logMedia, ...logExtra, ...(previewState && { preview: previewState }),
+      }, cfg.logPath);
       info(`Enviado para ${chatId}`);
     } catch (err) {
       results.push({ chatId, status: 'error', error: err.message });

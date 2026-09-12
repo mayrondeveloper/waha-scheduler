@@ -279,6 +279,9 @@ export function validateSchedule(raw, context = {}, index) {
   } else if (!isWall(raw.at)) {
     fail(`Agendamento "${label}": campo "at" deve ser uma data e hora no formato AAAA-MM-DDTHH:MM.`);
   }
+  if (raw.utm !== undefined && raw.utm !== null && typeof raw.utm !== 'boolean') {
+    fail(`Agendamento "${label}": campo "utm" deve ser true ou false.`);
+  }
   if (!isIsoOrNull(raw.firedAt)) fail(`Agendamento "${label}": campo "firedAt" deve ser uma data ISO.`);
   if (!isIsoOrNull(raw.missedAt)) fail(`Agendamento "${label}": campo "missedAt" deve ser uma data ISO.`);
   const pending = validatePending(raw.pending, label);
@@ -331,6 +334,8 @@ export function validateSchedule(raw, context = {}, index) {
     groups,
     ...(groupLists.length > 0 && { groupLists }),
     enabled: raw.enabled ?? true,
+    // UTM ligado é o padrão: só o "desligado" vai para o arquivo.
+    ...(raw.utm === false && { utm: false }),
     ...(raw.firedAt != null && { firedAt: raw.firedAt }),
     ...(raw.missedAt != null && { missedAt: raw.missedAt }),
     ...(pending && { pending }),

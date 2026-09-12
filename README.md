@@ -6,7 +6,8 @@ e registra cada tentativa de envio em um log JSONL.
 
 ## Requisitos
 
-- Node.js 18+ (usa `fetch` nativo e ES Modules)
+- Node.js 18+ (usa `fetch` nativo e ES Modules); o redirecionador de cliques
+  exige Node.js 24 (`node:sqlite`)
 - Uma instância do WAHA acessível com uma sessão de WhatsApp conectada
 
 ## Instalação
@@ -51,6 +52,11 @@ Todas as opções vêm de variáveis de ambiente (ver `.env.example`):
 | `DELAY_MAX_MS` | `8000` | Intervalo máximo entre envios |
 | `TIMEZONE` | `America/Sao_Paulo` | Fuso usado pelos agendamentos |
 | `UI_PORT` | `3010` | Porta da tela de agendamentos (sempre em `127.0.0.1`) |
+| `CLICKS_URL` | vazio | URL pública do redirecionador de cliques; vazia desliga a medição |
+| `CLICKS_API_KEY` | vazio | Chave da conta no redirecionador (`bin/redirect-account.js`) |
+| `REDIRECT_PORT` | `3030` | Porta do redirecionador (`npm run redirect`), sempre em `127.0.0.1` |
+| `REDIRECT_DB` | `./data/clicks.sqlite` | Banco do redirecionador |
+| `REDIRECT_PUBLIC_URL` | `http://127.0.0.1:<porta>` | URL pública com que os links curtos são montados |
 
 O intervalo aleatório entre `DELAY_MIN_MS` e `DELAY_MAX_MS` é aplicado entre um
 grupo e o seguinte, para evitar bloqueio por flood.
@@ -136,6 +142,58 @@ As mensagens aceitam **spintax**: `{Bom dia|Olá|Oi}, grupo!` sorteia uma
 alternativa por grupo (pode aninhar), para a mesma mensagem não sair idêntica
 em todos. A prévia mostra a primeira variação e conta as combinações; o
 histórico guarda o texto que saiu em cada grupo. Chave sem par é texto comum.
+
+### Cliques por disparo
+
+Com o redirecionador ligado, cada link da mensagem vira um link curto único por
+(disparo, grupo) antes de sair, e o histórico passa a mostrar "47 cliques (31
+únicos)" por disparo e, aberto, por grupo; o card mostra os cliques do último
+envio. Só cliques humanos contam: robôs, buscadores de prévia e o próprio
+remetente nos primeiros 60 segundos ficam de fora; "único" é por visitante e
+por dia (hash com sal diário, nenhum endereço guardado em claro). O destino
+recebe `utm_source=whatsapp`, `utm_medium=grupo`, `utm_campaign=<agendamento>`
+e `utm_content=<grupo>`, sem sobrescrever parâmetros que o link já tinha; a
+caixa "Adicionar UTM ao link" desliga isso por agendamento.
+
+O link sai com **prévia do destino** (título, descrição e imagem das tags
+Open Graph, buscadas na hora do disparo) pelo `link-custom-preview` do WAHA.
+O envio nunca depende disso: sem redirecionador (mais de 2 segundos sem
+resposta) a mensagem sai com os links originais e o histórico marca "não
+medido"; sem prévia, sai como texto simples.
+
+O redirecionador é um processo separado, com contas por chave, e precisa ser
+público (é ele que o celular de quem clica acessa). Para rodar no próprio Mac:
+
+```bash
+npm run redirect                                  # escuta em 127.0.0.1:3030
+node bin/redirect-account.js "Compara Livros"     # cria a conta e imprime a chave
+```
+
+Cole `CLICKS_URL` (a URL pública) e `CLICKS_API_KEY` no `.env` do agendador e
+da tela, e aponte `REDIRECT_PUBLIC_URL` para a mesma URL pública. Para expor a
+porta com um hostname fixo e HTTPS, um túnel nomeado da Cloudflare resolve sem
+abrir porta no roteador:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create waha-clicks
+cloudflared tunnel route dns waha-clicks go.seudominio.com.br
+```
+
+Em `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: waha-clicks
+credentials-file: /Users/voce/.cloudflared/<id-do-tunel>.json
+ingress:
+  - hostname: go.seudominio.com.br
+    service: http://127.0.0.1:3030
+  - service: http_status:404
+```
+
+E `cloudflared tunnel run waha-clicks` (ou `cloudflared service install` para
+subir com o sistema). O redirecionador guarda os cliques brutos por 180 dias e
+os totais para sempre, em `REDIRECT_DB`.
 
 No topo, uma faixa mostra se o agendador (`npm start`) está rodando, se o
 WAHA respondeu e qual é o próximo envio. É ela que avisa quando um agendamento
@@ -305,6 +363,8 @@ propague para agendamentos já salvos pela tela.
   defaults", e sim uma recusa explícita.
 - `enabled` — opcional (default `true`); agendamentos desabilitados são
   ignorados pelo cron (mas continuam disparáveis na hora, pela tela).
+- `utm` — opcional (default `true`); `false` manda o link rastreável sem os
+  parâmetros UTM no destino. Só importa com os cliques ligados.
 
 ### Formato antigo (v1)
 
@@ -329,6 +389,10 @@ contexto da falha. Quando a mensagem tem anexo, a linha traz também `media`
 com `kind` e `filename`. Um disparo adiado pela janela de silêncio traz
 `deferredFrom` (o horário original) e um envio que esperou pelo limite por
 hora traz `waitedMs`. Com spintax, `message` é o texto que saiu naquele grupo.
+Toda linha traz `dispatchId` (o mesmo em todos os grupos de um disparo),
+`tracking` (`none` sem link, `off` com cliques desligados, `ok` medido,
+`unavailable` quando o redirecionador não respondeu) e `links` (quantas URLs
+o texto tinha); com prévia do destino, `preview` é `sent` ou `failed`.
 
 ## Desenvolvimento
 
@@ -351,16 +415,23 @@ esperado — o envio de mídia só existe contra um WAHA de verdade.
 ```
 bin/list-groups.js   CLI: lista grupos com ids normalizados
 bin/send-now.js      CLI: disparo imediato
+bin/redirect-account.js  CLI: cria uma conta no redirecionador
 src/config.js        Variáveis de ambiente e defaults
 src/logger.js        Saída de console e log JSONL de envios
-src/waha/client.js   Cliente HTTP do WAHA (único ponto de rede)
+src/waha/client.js   Cliente HTTP do WAHA (único ponto de rede com o WAHA)
 src/broadcast.js     Envio para vários grupos, resiliente a falhas
+src/dispatch.js      Identidade do disparo, links rastreáveis e prévia
+src/links.js         URLs do texto, troca por links curtos, cliente do redirecionador
+src/preview.js       Open Graph do destino (prévia do link)
 src/schedules.js     Leitura e validação do schedules.json
+src/store.js         Leitura e escrita atômica do schedules.json
 src/index.js         Processo do agendador
 src/scheduler-status.js  Status do agendador, lido pela tela
+src/quiet.js         Janela de silêncio
+src/alerts.js        Alertas ao dono (WhatsApp e URL de push)
+src/redirect/        Redirecionador de cliques (processo separado, Node 24)
 src/ui/server.js     Servidor HTTP da tela (127.0.0.1)
-src/ui/store.js      Leitura e escrita atômica do schedules.json
-src/ui/routes/       Rotas de mensagens, agendamentos, ações e status
+src/ui/routes/       Rotas de mensagens, agendamentos, listas, ajustes, ações e status
 public/              A tela (HTML, CSS e módulos JS nativos, sem build)
 data/                Seus agendamentos (fora do versionamento)
 harness/             Mock do WAHA e validação por fase

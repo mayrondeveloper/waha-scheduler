@@ -12,6 +12,7 @@ import { mediaDirFor, mediaPath } from './media.js';
 import { updateStore } from './store.js';
 import { inQuietHours, quietEnd } from './quiet.js';
 import { sendAlert } from './alerts.js';
+import { prepareDispatch } from './dispatch.js';
 import * as wahaClient from './waha/client.js';
 
 export { dueAction, GRACE_MS };
@@ -117,12 +118,17 @@ export function startScheduler(options = {}) {
       const media = item.media
         ? { ...item.media, path: mediaPath(mediaDirFor(schedulesPath), item.media) }
         : null;
+      // Identidade do disparo, links rastreáveis e prévia do destino. Com
+      // anexo, a prévia não se aplica: a imagem é o anexo.
+      const prepared = await prepareDispatch({ schedule: item, message: item.message, targets: item.targets, cfg, client, fetchImpl });
       const result = await send(item.message, item.targets, {
         cfg,
         label: item.name,
         media,
         hourlyLimit: settings?.hourlyLimit ?? 0,
-        extra,
+        extra: { ...extra, ...prepared.extra },
+        links: prepared.links,
+        preview: media ? null : prepared.preview,
       });
       const { sent, failed } = result;
       success(`Agendamento "${item.name}": ${sent} enviada(s), ${failed} falha(s).`);
