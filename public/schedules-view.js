@@ -236,7 +236,8 @@ function whenSection(schedule, timezoneLabel) {
       <input type="hidden" name="mode" value="${mode}" />
       <div data-role="when-repeat" ${mode === 'repeat' ? '' : 'hidden'}>${repeatBlock(schedule)}</div>
       <div data-role="when-once" ${mode === 'once' ? '' : 'hidden'}>${onceBlock(schedule)}</div>
-      <p class="hint">${zone}<span id="preview" class="preview">—</span></p>`);
+      <p class="hint">${zone}<span id="preview" class="preview">—</span></p>
+      <p class="hint quiet-hint" data-role="quiet-hint" hidden></p>`);
 }
 
 function messageSection(schedule, messages, composing, media, mediaSrc) {
@@ -414,16 +415,22 @@ export function formGroupLists(form) {
 /**
  * HTML do modal que confirma um envio imediato.
  * @param {{schedule: object, message: object|undefined, groupName: (id: string) => string,
- *          groupLists?: object[]}} input
+ *          groupLists?: object[], warnings?: string[]}} input
+ *   warnings: avisos dos ajustes (pausa geral, janela de silêncio) que o
+ *   envio manual ignora de propósito.
  * @returns {string}
  */
-export function sendConfirm({ schedule, message, groupName, groupLists = [] }) {
+export function sendConfirm({ schedule, message, groupName, groupLists = [], warnings = [] }) {
   const targets = unionTargets(schedule, groupLists);
   const count = targets.length;
+  const warningsHtml = warnings.length
+    ? `<ul class="warnings">${warnings.map((w) => `<li>${icon('alert')}<span>${escape(w)}</span></li>`).join('')}</ul>`
+    : '';
   return `
     <div class="modal-box">
       <h2 id="modal-title">Enviar "${escape(schedule.name)}" agora?</h2>
       <p class="modal-text">A mensagem vai de verdade para ${count === 1 ? 'o grupo abaixo' : 'os grupos abaixo'}, fora do horário agendado.</p>
+      ${warningsHtml}
       <div class="chat"><div class="bubble">${message
         ? bubbleContent({ text: message.text, media: message.media ?? null, mediaSrc: mediaSrcFor(message.media) })
         : '<span class="muted">Mensagem não encontrada.</span>'}</div></div>

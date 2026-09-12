@@ -18,16 +18,21 @@ import { listsView, listForm, listsSubtitle } from './lists-view.js';
 import { historyView, historySubtitle } from './history-view.js';
 import { classifyMedia, validateFile, mediaStrip } from './media.js';
 import { variantsHint } from './spintax.js';
+import { settingsForm, formSettings, settingsSubtitle, quietHint } from './settings-view.js';
+import { parseCron } from './cron.js';
 
 const STATUS_POLL_MS = 15_000;
 const LOG_LIMIT = 500;
-const TABS = ['schedules', 'messages', 'lists', 'history'];
+const TABS = ['schedules', 'messages', 'lists', 'history', 'settings'];
 
 /** Estado da tela. Exportado para os testes. */
 export const state = {
   schedules: [],
   messages: [],
   groupLists: [],
+  settings: null,
+  // Resultado de GET /api/session: nulo até a aba Ajustes pedir.
+  session: null,
   groups: [],
   groupsLoaded: false,
   groupsError: null,
@@ -81,13 +86,25 @@ async function reloadData() {
   render();
 }
 
-// As listas são apoio: sem elas a tela continua utilizável, com aviso.
+// Listas e ajustes são apoio: sem eles a tela continua utilizável, com aviso.
 async function loadLists() {
   try {
-    state.groupLists = await api('/lists');
+    const [groupLists, settings] = await Promise.all([api('/lists'), api('/settings')]);
+    Object.assign(state, { groupLists, settings });
   } catch (err) {
-    toast(`Não foi possível carregar as listas de grupos: ${err.message}`, 'error');
+    toast(`Não foi possível carregar listas e ajustes: ${err.message}`, 'error');
   }
+}
+
+// A identidade da sessão só interessa à aba Ajustes; é pedida ao abri-la e
+// redesenha a aba quando chega.
+function loadSession() {
+  if (state.session) return;
+  state.session = { status: 'loading', me: null };
+  api('/session')
+    .then((session) => { state.session = session; })
+    .catch((err) => { state.session = { status: 'error', me: null, error: err.message }; })
+    .finally(() => { if (state.tab === 'settings') renderTab(); });
 }
 
 async function loadGroups() {
@@ -170,7 +187,7 @@ function renderTabs() {
   for (const id of TABS) $(`#${id}`).hidden = id !== state.tab;
 }
 
-const TAB_TITLES = { schedules: 'Agendamentos', messages: 'Mensagens', lists: 'Grupos', history: 'Histórico' };
+const TAB_TITLES = { schedules: 'Agendamentos', messages: 'Mensagens', lists: 'Grupos', history: 'Histórico', settings: 'Ajustes' };
 
 function primaryAction() {
   const action = {
@@ -187,6 +204,7 @@ function pageSubtitle() {
   if (state.tab === 'schedules') return schedulesSubtitle(state.schedules);
   if (state.tab === 'messages') return messagesSubtitle(state.messages);
   if (state.tab === 'lists') return listsSubtitle(state.groupLists);
+  if (state.tab === 'settings') return settingsSubtitle();
   return historySubtitle(groupDispatches(state.logs));
 }
 
@@ -216,6 +234,12 @@ function renderTab() {
     $('#messages').innerHTML = messageList({ messages: state.messages, schedules: state.schedules });
   } else if (state.tab === 'lists') {
     $('#lists').innerHTML = listsView({ groupLists: state.groupLists, schedules: state.schedules, groupName });
+  } else if (state.tab === 'settings') {
+    loadSession();
+    const session = state.session?.status === 'loading' ? null : state.session;
+    $('#settings').innerHTML = state.settings
+      ? settingsForm({ settings: state.settings, session })
+      : '<div class="empty"><p>Os ajustes não puderam ser carregados. Recarregue a página.</p></div>';
   } else {
     $('#history').innerHTML = historyView({
       dispatches: groupDispatches(state.logs),
@@ -320,6 +344,25 @@ function renderScheduleDrawer({ fresh = false } = {}) {
   const data = state.editing.data;
   if (whenModeOf(data) === 'once') showOncePreview(data.at ?? '');
   else updatePreview(data.cron ?? '');
+  // O aviso da janela vem dos dados em edição, não do formulário: no boot
+  // do painel o DOM ainda pode não ter os campos.
+  const time = whenModeOf(data) === 'once' ? (data.at ?? '').slice(11) : (data.cron ? parseCron(data.cron)?.time : '');
+  showQuietHint(time ?? '');
+}
+
+// Aviso de que o horário escolhido cai na janela de silêncio dos ajustes.
+function showQuietHint(time) {
+  const el = drawer().querySelector('[data-role="quiet-hint"]');
+  if (!el) return;
+  const text = quietHint(time, state.status?.quietHours);
+  el.hidden = !text;
+  el.textContent = text;
+}
+
+function refreshQuietHint(form) {
+  const when = formWhen(form);
+  const time = 'at' in when ? when.at.slice(11) : (form.querySelector('input[name="time"]')?.value ?? '');
+  showQuietHint(time);
 }
 
 /**
@@ -709,11 +752,20 @@ function confirmDialog({ title, body, confirm, danger = false }) {
   });
 }
 
+// Avisos que o envio manual ignora de propósito: pausa geral e janela de
+// silêncio valem para o agendador, não para um clique explícito.
+function sendWarnings() {
+  const warnings = [];
+  if (state.status?.paused) warnings.push('Envios pausados nos ajustes: este envio manual sai mesmo assim.');
+  if (state.status?.quietUntil) warnings.push('Dentro da janela de silêncio: o envio manual sai agora mesmo assim.');
+  return warnings;
+}
+
 function openSendModal(id) {
   const schedule = state.schedules.find((s) => s.id === id);
   const message = state.messages.find((m) => m.id === schedule.messageId);
   const m = modal();
-  m.innerHTML = sendConfirm({ schedule, message, groupName, groupLists: state.groupLists });
+  m.innerHTML = sendConfirm({ schedule, message, groupName, groupLists: state.groupLists, warnings: sendWarnings() });
   m.returnValue = '';
   m.showModal();
 }
@@ -875,6 +927,36 @@ async function saveSchedule(form) {
   await reloadData();
 }
 
+async function saveSettings(form) {
+  const settings = formSettings(form);
+  if (settings.quietHours === null && form.querySelector('[name="quietEnabled"]')?.checked) {
+    throw new Error('Informe o início e o fim da janela de silêncio.');
+  }
+  state.settings = await api('/settings', { method: 'PUT', body: JSON.stringify(settings) });
+  toast('Ajustes salvos');
+  await refreshStatus();
+  renderTab();
+}
+
+async function resumeAll() {
+  state.settings = await api('/settings', { method: 'PUT', body: JSON.stringify({ ...state.settings, paused: false }) });
+  toast('Envios retomados');
+  await refreshStatus();
+  if (state.tab === 'settings') renderTab();
+}
+
+async function testAlert(button) {
+  button.disabled = true;
+  try {
+    const { sent } = await api('/alerts/test', { method: 'POST' });
+    const names = { whatsapp: 'WhatsApp', push: 'URL de push' };
+    if (sent.length === 0) toast('Nenhum alerta saiu: confira o WhatsApp da sessão e a URL de push salvos.', 'error');
+    else toast(`Alerta de teste enviado por ${sent.map((c) => names[c] ?? c).join(' e ')}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function saveList(form) {
   const groups = formGroups(form);
   if (groups.length === 0) throw new Error('Selecione ao menos um grupo para a lista.');
@@ -979,6 +1061,8 @@ export function handleClick(evt) {
     'delete-list': () => guarded(() => deleteList(id)),
     duplicate: () => duplicateSchedule(id),
     'duplicate-message': () => duplicateMessage(id),
+    'resume-all': () => guarded(() => resumeAll()),
+    'alert-test': () => guarded(() => testAlert(el)),
     'close-drawer': () => requestCloseDrawer(),
     'close-modal': () => modal().close(),
     'compose-message': () => {
@@ -1028,8 +1112,10 @@ export function handleInput(evt) {
   const target = evt.target;
   if (['day', 'time', 'cron'].includes(target.name)) {
     updatePreview(formCron(target.form));
+    if (target.name === 'time') refreshQuietHint(target.form);
   } else if (['date', 'onceTime'].includes(target.name)) {
     showOncePreview(formWhen(target.form).at);
+    refreshQuietHint(target.form);
   } else if (target.dataset?.editor !== undefined) {
     updateEditorPreview(target);
   } else if (target.dataset?.role === 'group-search') {
@@ -1101,13 +1187,17 @@ export async function handleSubmit(evt) {
 
   const submit = form.querySelector('[type="submit"]');
   if (submit) submit.disabled = true;
-  hideFormError(drawer());
+  // O formulário de ajustes fica na página, não no painel: o erro dele
+  // aparece ali mesmo.
+  const container = form.id === 'form-settings' ? form : drawer();
+  hideFormError(container);
   try {
     if (form.id === 'form-schedule') await saveSchedule(form);
     else if (form.id === 'form-message') await saveMessage(form);
     else if (form.id === 'form-list') await saveList(form);
+    else if (form.id === 'form-settings') await saveSettings(form);
   } catch (err) {
-    showFormError(drawer(), err.message);
+    showFormError(container, err.message);
   } finally {
     if (submit?.isConnected) submit.disabled = false;
   }

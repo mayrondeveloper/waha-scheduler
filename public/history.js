@@ -37,13 +37,17 @@ export function groupDispatches(logs) {
     const manual = label.endsWith(MANUAL_SUFFIX);
     const base = manual ? label.slice(0, -MANUAL_SUFFIX.length) : label;
     const failed = entries.filter((e) => e.status === 'error').length;
+    const skipped = entries.filter((e) => e.status === 'skipped').length;
     return {
       name: LABEL_NAMES[base] ?? (base || 'Envio sem rótulo'),
       manual,
       startedAt: entries[0].ts,
       entries,
-      sent: entries.length - failed,
+      sent: entries.length - failed - skipped,
       failed,
+      skipped,
+      // Disparo adiado pela janela de silêncio: o horário original.
+      deferredFrom: entries[0].deferredFrom ?? null,
     };
   });
 }

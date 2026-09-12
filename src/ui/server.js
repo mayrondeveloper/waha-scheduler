@@ -58,6 +58,7 @@ const STATIC_FILES = {
   '/media.js': ['media.js', JS],
   '/lists-view.js': ['lists-view.js', JS],
   '/spintax.js': ['spintax.js', JS],
+  '/settings-view.js': ['settings-view.js', JS],
   // Fontes do design system, embutidas: a tela não carrega nada da internet.
   '/fonts/geist.woff2': ['fonts/geist.woff2', 'font/woff2'],
   '/fonts/geist-mono.woff2': ['fonts/geist-mono.woff2', 'font/woff2'],

@@ -113,6 +113,30 @@ destino é a união. Mudar a lista muda os próximos envios de quem a usa; uma
 lista em uso não pode ser excluída. **Duplicar**, no menu do card e na linha
 da mensagem, abre o editor preenchido com "(cópia)" no nome.
 
+A aba **Ajustes** guarda o que protege o número e avisa o dono:
+
+- **Pausar todos os envios**: nenhum agendamento dispara; o histórico registra
+  cada disparo pulado; envios únicos esperam a retomada (os que passarem de 10
+  minutos ficam como perdidos). A faixa do topo fica vermelha, com "Retomar".
+  O "Enviar agora" continua funcionando, com aviso no modal.
+- **Janela de silêncio** (ex.: 22:00 a 08:00, pode virar a meia-noite): um
+  disparo que cair nela é adiado para o fim da janela, o adiamento fica gravado
+  no arquivo (sobrevive a reinício) e o histórico marca "adiado". O formulário
+  avisa quando o horário escolhido cai na janela.
+- **Limite por hora** (padrão 50, 0 desliga): antes de cada grupo, o envio
+  conta o que saiu na última hora, pelo agendador e pela tela, e no limite
+  espera a vez em vez de perder o envio. O histórico diz quanto esperou.
+- **Alertas**: falhas num disparo, envio único perdido e a volta do número vão
+  para o WhatsApp do próprio número da sessão; a queda do número vai por um
+  POST em texto numa URL de push (o [ntfy.sh](https://ntfy.sh) dá push no
+  celular sem conta: crie um tópico e cole a URL). "Enviar teste" confere os
+  dois canais. O agendador consulta a sessão do WAHA a cada 60 segundos.
+
+As mensagens aceitam **spintax**: `{Bom dia|Olá|Oi}, grupo!` sorteia uma
+alternativa por grupo (pode aninhar), para a mesma mensagem não sair idêntica
+em todos. A prévia mostra a primeira variação e conta as combinações; o
+histórico guarda o texto que saiu em cada grupo. Chave sem par é texto comum.
+
 No topo, uma faixa mostra se o agendador (`npm start`) está rodando, se o
 WAHA respondeu e qual é o próximo envio. É ela que avisa quando um agendamento
 não vai sair porque o agendador está parado. O agendador grava um sinal de vida
@@ -202,6 +226,12 @@ propague para agendamentos já salvos pela tela.
 ```json
 {
   "defaultGroups": ["123456789@g.us"],
+  "settings": {
+    "paused": false,
+    "quietHours": { "start": "22:00", "end": "08:00" },
+    "hourlyLimit": 50,
+    "alerts": { "whatsapp": true, "pushUrl": "https://ntfy.sh/meu-topico" }
+  },
   "groupLists": [
     { "id": "lst-3a9f1c2e", "name": "Ofertas SP", "groups": ["123456789@g.us", "987654321@g.us"] }
   ],
@@ -252,8 +282,13 @@ propague para agendamentos já salvos pela tela.
   de forma estável entre gravações.
 - `name` — obrigatório e único (entre agendamentos, e separadamente entre
   mensagens); identifica o agendamento nos logs.
+- `settings` — os ajustes da tela; ausente vale os padrões (`paused: false`,
+  sem `quietHours`, `hourlyLimit: 50`, alerta no WhatsApp ligado e `pushUrl`
+  vazia). O agendador aplica mudanças sem reiniciar.
 - `groupLists` (na raiz) — listas de grupos reutilizáveis; cada uma tem `id`
   (gerado quando ausente), `name` único e `groups` com ao menos um id.
+- `pending` (no agendamento) — gravado pelo agendador quando um disparo cai na
+  janela de silêncio: `{ at, from, reason }`; some quando o envio sai.
 - `cron` ou `at` — exatamente um dos dois. `cron` é validado na inicialização;
   um cron inválido aborta o processo apontando o agendamento problemático.
   `at` é um envio único, hora de parede no fuso `TIMEZONE`, no formato
@@ -288,9 +323,12 @@ Uma linha JSON por tentativa em `LOG_PATH`:
 {"ts":"2026-09-06T03:13:58.038Z","status":"sent","chatId":"123@g.us","message":"Bom dia!","label":"bom-dia-segunda"}
 ```
 
-`status` é `sent` ou `error`; entradas com erro trazem o campo `error` com o
-contexto da falha. Quando a mensagem tem anexo, a linha traz também
-`media` com `kind` e `filename`.
+`status` é `sent`, `error` ou `skipped` (disparo pulado com os envios
+pausados, com `reason`); entradas com erro trazem o campo `error` com o
+contexto da falha. Quando a mensagem tem anexo, a linha traz também `media`
+com `kind` e `filename`. Um disparo adiado pela janela de silêncio traz
+`deferredFrom` (o horário original) e um envio que esperou pelo limite por
+hora traz `waitedMs`. Com spintax, `message` é o texto que saiu naquele grupo.
 
 ## Desenvolvimento
 
