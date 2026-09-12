@@ -1,6 +1,6 @@
 // Anexos das mensagens: tipos aceitos, gravação em data/media e leitura para o envio.
 
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -111,6 +111,26 @@ export function saveMedia(dir, input, { maxBytes = MAX_MEDIA_BYTES } = {}) {
     throw new Error(`Não foi possível gravar o anexo em ${path}: ${err.message}`);
   }
   return media;
+}
+
+/**
+ * Copia o arquivo de um anexo para um id novo (duplicar mensagem): os
+ * metadados são os mesmos, só o id muda.
+ * @param {string} dir
+ * @param {{id: string, filename: string, mimetype: string, size: number, kind: string}} media
+ * @returns {{id: string, filename: string, mimetype: string, size: number, kind: string}}
+ */
+export function copyMedia(dir, media) {
+  const copy = { ...media, id: `med-${randomUUID().slice(0, 8)}` };
+  const from = mediaPath(dir, media);
+  const to = mediaPath(dir, copy);
+  try {
+    copyFileSync(from, to);
+  } catch (err) {
+    if (err.code === 'ENOENT') throw new Error(`Anexo não encontrado: ${media.filename} (${from})`);
+    throw new Error(`Não foi possível copiar o anexo "${media.filename}": ${err.message}`);
+  }
+  return copy;
 }
 
 /**

@@ -315,6 +315,42 @@ function renderScheduleDrawer({ fresh = false } = {}) {
 }
 
 /**
+ * Nome para uma cópia: "Promo (cópia)", ou "(cópia 2)", "(cópia 3)"... quando
+ * já existe.
+ * @param {string} name Nome do original.
+ * @param {string[]} existing Nomes já usados.
+ * @returns {string}
+ */
+export function copyName(name, existing) {
+  const taken = new Set(existing);
+  let candidate = `${name} (cópia)`;
+  for (let n = 2; taken.has(candidate); n++) candidate = `${name} (cópia ${n})`;
+  return candidate;
+}
+
+// Duplicar abre o editor com os dados do original e sem id: salvar cria um
+// item novo. O resultado de um envio único não vem junto.
+function duplicateSchedule(id) {
+  const { id: _id, firedAt: _f, missedAt: _m, ...source } = state.schedules.find((s) => s.id === id);
+  const data = structuredClone({ ...source, name: copyName(source.name, state.schedules.map((s) => s.name)) });
+  state.editing = {
+    type: 'schedule', data, composing: false, snapshot: '', media: { current: null, pending: null }, mediaDirty: false,
+  };
+  renderScheduleDrawer({ fresh: true });
+}
+
+// O anexo da cópia é o mesmo arquivo referenciado por id: o servidor copia
+// o arquivo ao criar a mensagem nova.
+function duplicateMessage(id) {
+  const source = state.messages.find((m) => m.id === id);
+  const data = { name: copyName(source.name, state.messages.map((m) => m.name)), text: source.text, media: source.media ?? null };
+  state.editing = {
+    type: 'message', data, composing: false, snapshot: '', media: { current: source.media ?? null, pending: null }, mediaDirty: false,
+  };
+  showDrawer(messageForm({ message: data }), { fresh: true });
+}
+
+/**
  * Abre o painel de lista de grupos: nova (sem id) ou edição.
  * @param {string} [id]
  */
@@ -926,6 +962,8 @@ export function handleClick(evt) {
     'new-list': () => openListEditor(),
     'edit-list': () => openListEditor(id),
     'delete-list': () => guarded(() => deleteList(id)),
+    duplicate: () => duplicateSchedule(id),
+    'duplicate-message': () => duplicateMessage(id),
     'close-drawer': () => requestCloseDrawer(),
     'close-modal': () => modal().close(),
     'compose-message': () => {

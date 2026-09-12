@@ -127,6 +127,7 @@ function scheduleCard(s, index, { messages, nextRuns, timeZone, now, groupName, 
           <summary class="icon-btn" aria-label="Mais ações para ${name}">${icon('ellipsis')}</summary>
           <div class="menu-items">
             <button type="button" data-action="edit" data-id="${id}">${icon('pencil')} Editar</button>
+            <button type="button" data-action="duplicate" data-id="${id}">${icon('copy')} Duplicar</button>
             <button type="button" class="danger" data-action="delete-schedule" data-id="${id}">${icon('trash')} Excluir</button>
           </div>
         </details>
