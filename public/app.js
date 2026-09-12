@@ -17,6 +17,7 @@ import { messageList, messageForm, emojiPanel, messagesSubtitle, bubbleContent }
 import { listsView, listForm, listsSubtitle } from './lists-view.js';
 import { historyView, historySubtitle } from './history-view.js';
 import { classifyMedia, validateFile, mediaStrip } from './media.js';
+import { variantsHint } from './spintax.js';
 
 const STATUS_POLL_MS = 15_000;
 const LOG_LIMIT = 500;
@@ -561,9 +562,16 @@ function updateMessagePreview(select) {
 // ---------- Editor de mensagem ----------
 
 function updateEditorPreview(textarea) {
-  const preview = textarea.closest('.editor').querySelector('[data-role="editor-preview"]');
+  const editor = textarea.closest('.editor');
+  const preview = editor.querySelector('[data-role="editor-preview"]');
   const { media, src } = editingMedia();
   preview.innerHTML = bubbleContent({ text: textarea.value, media, mediaSrc: src });
+  const hint = editor.querySelector('[data-role="variants"]');
+  if (hint) {
+    const text = variantsHint(textarea.value);
+    hint.hidden = !text;
+    hint.textContent = text;
+  }
 }
 
 // Redesenha a tira e o balão depois de anexar ou remover, sem tocar no texto.
