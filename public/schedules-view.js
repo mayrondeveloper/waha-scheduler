@@ -102,7 +102,14 @@ function failureLine(last, timeZone, now) {
   return `<div class="card-failure">${icon('alert')} Último envio falhou · ${escape(error)} · ${escape(formatWhen(last.startedAt, { timeZone, now }))}</div>`;
 }
 
-function scheduleCard(s, index, { messages, nextRuns, timeZone, now, groupName, lastDispatches, groupLists }) {
+// Cliques do último disparo medido, quando já chegaram.
+function clicksLine(last, clicks) {
+  const data = last?.tracking === 'ok' && last.dispatchId ? clicks[last.dispatchId] : null;
+  if (!data) return '';
+  return `<div class="card-sub">Último envio: <span class="clicks">${data.clicks} ${data.clicks === 1 ? 'clique' : 'cliques'} (${data.unique} ${data.unique === 1 ? 'único' : 'únicos'})</span></div>`;
+}
+
+function scheduleCard(s, index, { messages, nextRuns, timeZone, now, groupName, lastDispatches, groupLists, clicks }) {
   const message = messages.find((m) => m.id === s.messageId);
   const last = lastDispatches[s.name];
   const id = escape(s.id);
@@ -122,6 +129,7 @@ function scheduleCard(s, index, { messages, nextRuns, timeZone, now, groupName, 
         <div class="card-sub">${whenText(s, timeZone, now)} · ${escape(message?.name ?? 'mensagem não encontrada')}</div>
         <div class="card-meta">${nextText(s, nextRuns, timeZone, now)}</div>
         <div class="card-sub">${groupsText(s, groupLists, groupName)}</div>
+        ${clicksLine(last, clicks)}
         ${failureLine(last, timeZone, now)}
       </div>
       <div class="card-actions">
@@ -149,7 +157,7 @@ function scheduleCard(s, index, { messages, nextRuns, timeZone, now, groupName, 
  * @returns {string}
  */
 export function scheduleList({
-  schedules, messages, nextRuns = {}, timeZone, now, groupName = (id) => id, lastDispatches = {}, groupLists = [],
+  schedules, messages, nextRuns = {}, timeZone, now, groupName = (id) => id, lastDispatches = {}, groupLists = [], clicks = {},
 }) {
   if (schedules.length === 0) {
     return `
@@ -159,7 +167,7 @@ export function scheduleList({
         <button type="button" class="btn" data-action="new-schedule">${icon('plus')} Novo agendamento</button>
       </div>`;
   }
-  const context = { messages, nextRuns, timeZone, now, groupName, lastDispatches, groupLists };
+  const context = { messages, nextRuns, timeZone, now, groupName, lastDispatches, groupLists, clicks };
   return `<ul class="cards">${schedules.map((s, index) => scheduleCard(s, index, context)).join('')}</ul>`;
 }
 
@@ -354,6 +362,10 @@ export function scheduleForm({
         </label>
         ${whenSection(schedule, timezoneLabel)}
         ${messageSection(schedule, messages, composing, media, mediaSrc)}
+        <label class="check utm">
+          <input type="checkbox" name="utm" ${schedule.utm === false ? '' : 'checked'} />
+          <span>Adicionar UTM ao link <small class="muted">(utm_source=whatsapp, utm_campaign=agendamento, utm_content=grupo; só com os cliques ligados)</small></span>
+        </label>
         ${groupsSection({ saved: schedule.groups ?? [], savedLists: schedule.groupLists ?? [], groups, groupLists, groupsError })}
       </div>
       <footer class="drawer-footer">
@@ -404,6 +416,16 @@ export function formGroups(form) {
   const text = form.querySelector('#groups-text');
   if (text) return text.value.split(',').map((g) => g.trim()).filter(Boolean);
   return [...form.querySelectorAll('input[name="group"]:checked')].map((input) => input.value);
+}
+
+/**
+ * A caixa "Adicionar UTM ao link" do formulário (ligada por padrão).
+ * @param {{querySelector: Function}} form
+ * @returns {boolean}
+ */
+export function formUtm(form) {
+  const box = form.querySelector('input[name="utm"]');
+  return box ? Boolean(box.checked) : true;
 }
 
 /**

@@ -10,7 +10,7 @@ import { recentEmojis, rememberEmoji } from './emoji.js';
 import { groupDispatches, lastDispatchByName } from './history.js';
 import { statusBar } from './status-view.js';
 import {
-  scheduleList, scheduleForm, formCron, formWhen, formGroups, formGroupLists, unionTargets, searchKey,
+  scheduleList, scheduleForm, formCron, formWhen, formGroups, formGroupLists, formUtm, unionTargets, searchKey,
   selectedCountLabel, sendConfirm, sendResult, schedulesSubtitle,
 } from './schedules-view.js';
 import { messageList, messageForm, emojiPanel, messagesSubtitle, bubbleContent } from './messages-view.js';
@@ -33,6 +33,9 @@ export const state = {
   settings: null,
   // Resultado de GET /api/session: nulo até a aba Ajustes pedir.
   session: null,
+  // Cliques por dispatchId, de GET /api/clicks: undefined = ainda não pedido,
+  // null = o redirecionador não respondeu.
+  clicks: {},
   groups: [],
   groupsLoaded: false,
   groupsError: null,
@@ -76,6 +79,29 @@ export async function load() {
   await refreshStatus({ quiet: true });
   render();
   await loadGroups();
+  await loadClicks();
+}
+
+const CLICKS_POLL_MS = 60_000;
+const CLICKS_BATCH = 60;
+
+// Cliques dos disparos medidos que a tela mostra: os mais recentes do
+// histórico e o último de cada agendamento. Falha não derruba nada: os
+// disparos ficam como "cliques…" até a próxima tentativa.
+async function loadClicks() {
+  if (state.status?.clicks !== 'on') return;
+  const ids = [...new Set(groupDispatches(state.logs)
+    .filter((d) => d.tracking === 'ok' && d.dispatchId)
+    .map((d) => d.dispatchId))].slice(0, CLICKS_BATCH);
+  if (ids.length === 0) return;
+  try {
+    const fetched = await api(`/clicks?${ids.map((id) => `dispatch=${encodeURIComponent(id)}`).join('&')}`);
+    state.clicks = { ...state.clicks, ...fetched };
+  } catch (err) {
+    toast(`Não foi possível consultar os cliques: ${err.message}`, 'error');
+    return;
+  }
+  if (state.tab === 'history' || state.tab === 'schedules') renderTab();
 }
 
 async function reloadData() {
@@ -155,6 +181,7 @@ export async function refreshStatus({ quiet = false } = {}) {
       toast(`Não foi possível atualizar o histórico: ${err.message}`, 'error');
     }
     renderTab();
+    loadClicks();
   }
 }
 
@@ -228,6 +255,7 @@ function renderTab() {
       now: now(),
       groupName,
       lastDispatches: lastDispatchByName(groupDispatches(state.logs)),
+      clicks: state.clicks,
       groupLists: state.groupLists,
     });
   } else if (state.tab === 'messages') {
@@ -243,6 +271,7 @@ function renderTab() {
   } else {
     $('#history').innerHTML = historyView({
       dispatches: groupDispatches(state.logs),
+      clicks: state.clicks,
       filter: state.historyFilter,
       groupName,
       timeZone: timeZone(),
@@ -471,6 +500,7 @@ function captureScheduleForm() {
   applyWhen(data, formWhen(form));
   data.groups = formGroups(form);
   data.groupLists = formGroupLists(form);
+  data.utm = formUtm(form);
   const messageId = fieldValue(form, 'messageId');
   if (messageId) data.messageId = messageId;
 }
@@ -863,6 +893,7 @@ async function persistSchedule(data) {
     messageId: data.messageId,
     groups: data.groups,
     groupLists: data.groupLists ?? [],
+    utm: data.utm !== false,
   };
   if (data.id) {
     await api(`/schedules/${encodeURIComponent(data.id)}`, {
@@ -887,7 +918,7 @@ async function saveSchedule(form) {
   if (groups.length === 0 && groupLists.length === 0) throw new Error('Selecione ao menos um grupo de destino.');
 
   const editing = state.editing;
-  editing.data = { ...editing.data, name: fieldValue(form, 'name'), groups, groupLists };
+  editing.data = { ...editing.data, name: fieldValue(form, 'name'), groups, groupLists, utm: formUtm(form) };
   applyWhen(editing.data, when);
 
   if (form.querySelector('[name="messageText"]')) {
@@ -1237,6 +1268,10 @@ export function start() {
   });
 
   setInterval(() => refreshStatus(), STATUS_POLL_MS);
+  // Cliques chegam depois do envio: com o histórico aberto, atualiza a cada minuto.
+  setInterval(() => {
+    if (state.tab === 'history') loadClicks();
+  }, CLICKS_POLL_MS);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') refreshStatus();
   });

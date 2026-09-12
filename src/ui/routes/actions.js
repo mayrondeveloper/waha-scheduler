@@ -12,7 +12,14 @@ import { statusPathFor, readStatus, schedulerState } from '../../scheduler-statu
 import { mediaDirFor, mediaPath } from '../../media.js';
 import { inQuietHours, quietEnd } from '../../quiet.js';
 import { sendAlert } from '../../alerts.js';
-import { prepareDispatch } from '../../dispatch.js';
+import { prepareDispatch, clicksEnabled } from '../../dispatch.js';
+import { fetchClicks } from '../../links.js';
+
+// Cache dos cliques por disparo: o redirecionador não é consultado mais de
+// uma vez por minuto para o mesmo disparo, por mais que a tela peça.
+const CLICKS_CACHE_MS = 60_000;
+const CLICKS_MAX_IDS = 100;
+const clicksCache = new Map();
 import { error } from '../../logger.js';
 
 const { listGroups, getSession } = wahaClient;
@@ -118,6 +125,29 @@ export const actionRoutes = {
     return { body: { sent, failed, results, dispatchId: prepared.dispatchId, tracking: prepared.tracking } };
   },
 
+  // Cliques por disparo: a chave da conta fica no servidor; o navegador nunca
+  // fala com o redirecionador. Desligado, devolve vazio.
+  'GET /api/clicks': async ({ url, cfg }) => {
+    if (!clicksEnabled(cfg)) return { body: {} };
+    const ids = [...new Set(url.searchParams.getAll('dispatch'))].filter((id) => /^[\w-]{1,64}$/.test(id)).slice(0, CLICKS_MAX_IDS);
+    const now = Date.now();
+    const body = {};
+    const missing = [];
+    for (const id of ids) {
+      const cached = clicksCache.get(id);
+      if (cached && now - cached.at < CLICKS_CACHE_MS) body[id] = cached.data;
+      else missing.push(id);
+    }
+    if (missing.length > 0) {
+      const fetched = await fetchClicks(missing, cfg);
+      for (const [id, data] of Object.entries(fetched)) {
+        body[id] = data;
+        if (data) clicksCache.set(id, { at: now, data });
+      }
+    }
+    return { body };
+  },
+
   'GET /api/session': async ({ cfg }) => {
     try {
       return { body: await getSession(cfg) };
@@ -217,6 +247,7 @@ export const actionRoutes = {
         quietUntil: quiet ? new Date(quietEnd(now, settings.quietHours, cfg.timezone)).toISOString() : null,
         // O que o agendador viu da sessão do WAHA na última consulta.
         waha: status?.waha ?? null,
+        clicks: clicksEnabled(cfg) ? 'on' : 'off',
       },
     };
   },

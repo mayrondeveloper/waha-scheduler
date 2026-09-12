@@ -440,6 +440,14 @@ select {
 .dispatch-entries li.is-skipped, .dispatch-entries li.dispatch-note { color: var(--text-tertiary); }
 .dispatch-entries li.is-skipped .icon, .dispatch-entries li.dispatch-note .icon { color: var(--text-tertiary); }
 .dispatch-icon.tone-neutral { color: var(--text-tertiary); }
+.clicks {
+  display: inline-block; padding: 1px 8px; font-family: var(--font-mono); font-size: 12px; white-space: nowrap;
+  color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-full);
+}
+.card-sub .clicks { color: var(--text-primary); }
+.dispatch > summary { grid-template-columns: auto minmax(0, 1fr) auto auto auto auto; }
+.check.utm { margin: -6px 0 2px; font-size: 13px; }
+.check.utm small { display: inline; font-size: 12px; }
 
 .list-picks { max-height: none; margin-bottom: 8px; }
 .group-list-pick .group-name { font-weight: 500; }
