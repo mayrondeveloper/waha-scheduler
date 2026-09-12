@@ -1,6 +1,6 @@
 // Rotas HTTP dos agendamentos.
 
-import { readStore, updateStore } from '../store.js';
+import { readStore, updateStore } from '../../store.js';
 import { validateSchedule } from '../../schedules.js';
 
 function httpError(status, message) {

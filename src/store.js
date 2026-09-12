@@ -1,7 +1,7 @@
 // Leitura e escrita atômica do arquivo de agendamentos, com escritas serializadas.
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync, existsSync } from 'node:fs';
-import { normalizeStore } from '../schedules.js';
+import { normalizeStore } from './schedules.js';
 
 // Serializa as escritas: cada updateStore encadeia na anterior. Um processo,
 // um escritor — não é lock entre processos, e o design não precisa de um.

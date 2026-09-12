@@ -1,7 +1,7 @@
 // Rotas HTTP da biblioteca de mensagens, com o anexo de cada uma.
 
 import { readFileSync } from 'node:fs';
-import { readStore, updateStore } from '../store.js';
+import { readStore, updateStore } from '../../store.js';
 import { validateMessage } from '../../schedules.js';
 import { MAX_MEDIA_BYTES, mediaDirFor, mediaPath, saveMedia, removeMedia } from '../../media.js';
 

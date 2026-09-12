@@ -3,7 +3,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { schedule as scheduleCron } from 'node-cron';
-import { readStore } from '../store.js';
+import { readStore } from '../../store.js';
 import { checkCron } from '../../schedules.js';
 import { listGroups } from '../../waha/client.js';
 import { broadcast } from '../../broadcast.js';
