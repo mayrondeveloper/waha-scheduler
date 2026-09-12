@@ -11,8 +11,67 @@ import { isWall, wallToInstant } from './dates.js';
 /** Atraso máximo tolerado num envio único: além disso, ele é dado como perdido. */
 export const GRACE_MS = 600_000;
 
+/** Ajustes quando o arquivo não os tem: nada pausado, sem janela, 50 por hora, alerta no WhatsApp. */
+export const DEFAULT_SETTINGS = Object.freeze({
+  paused: false,
+  quietHours: null,
+  hourlyLimit: 50,
+  alerts: Object.freeze({ whatsapp: true, pushUrl: '' }),
+});
+
 function fail(message) {
   throw new Error(message);
+}
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * Valida e completa os ajustes ("settings") com os padrões.
+ * @param {unknown} raw Objeto cru do arquivo ou da API; ausente vale os padrões.
+ * @returns {{paused: boolean, quietHours: {start: string, end: string}|null, hourlyLimit: number,
+ *            alerts: {whatsapp: boolean, pushUrl: string}}}
+ */
+export function validateSettings(raw) {
+  if (raw == null) return structuredClone(DEFAULT_SETTINGS);
+  if (typeof raw !== 'object' || Array.isArray(raw)) fail('Ajustes: "settings" deve ser um objeto.');
+
+  const paused = raw.paused ?? DEFAULT_SETTINGS.paused;
+  if (typeof paused !== 'boolean') fail('Ajustes: campo "paused" deve ser true ou false.');
+
+  let quietHours = null;
+  if (raw.quietHours != null) {
+    const q = raw.quietHours;
+    if (typeof q !== 'object' || Array.isArray(q)) fail('Ajustes: campo "quietHours" deve ser um objeto com "start" e "end".');
+    if (typeof q.start !== 'string' || !HHMM.test(q.start)) fail('Ajustes: campo "quietHours.start" deve ser um horário HH:MM.');
+    if (typeof q.end !== 'string' || !HHMM.test(q.end)) fail('Ajustes: campo "quietHours.end" deve ser um horário HH:MM.');
+    if (q.start === q.end) fail('Ajustes: a janela de silêncio precisa de início e fim diferentes.');
+    quietHours = { start: q.start, end: q.end };
+  }
+
+  const hourlyLimit = raw.hourlyLimit ?? DEFAULT_SETTINGS.hourlyLimit;
+  if (!Number.isInteger(hourlyLimit) || hourlyLimit < 0 || hourlyLimit > 1000) {
+    fail('Ajustes: campo "hourlyLimit" deve ser um inteiro de 0 (desligado) a 1000.');
+  }
+
+  const alertsRaw = raw.alerts ?? {};
+  if (typeof alertsRaw !== 'object' || Array.isArray(alertsRaw)) fail('Ajustes: campo "alerts" deve ser um objeto.');
+  const whatsapp = alertsRaw.whatsapp ?? DEFAULT_SETTINGS.alerts.whatsapp;
+  if (typeof whatsapp !== 'boolean') fail('Ajustes: campo "alerts.whatsapp" deve ser true ou false.');
+  const pushUrl = (alertsRaw.pushUrl ?? '').toString().trim();
+  if (pushUrl && !/^https?:\/\/\S+$/i.test(pushUrl)) fail('Ajustes: campo "alerts.pushUrl" deve ser uma URL http(s) ou ficar vazio.');
+
+  return { paused, quietHours, hourlyLimit, alerts: { whatsapp, pushUrl } };
+}
+
+// Adiamento pela janela de silêncio: gravado pelo agendador, disparado pelo tique.
+function validatePending(raw, label) {
+  if (raw == null) return null;
+  const bad = (why) => fail(`Agendamento "${label}": campo "pending" ${why}.`);
+  if (typeof raw !== 'object' || Array.isArray(raw)) bad('deve ser um objeto');
+  if (typeof raw.at !== 'string' || !Number.isFinite(Date.parse(raw.at))) bad('precisa de "at" em data ISO');
+  if (typeof raw.from !== 'string' || !Number.isFinite(Date.parse(raw.from))) bad('precisa de "from" em data ISO');
+  if (typeof raw.reason !== 'string' || !raw.reason.trim()) bad('precisa de "reason"');
+  return { at: raw.at, from: raw.from, reason: raw.reason.trim() };
 }
 
 /**
@@ -222,6 +281,7 @@ export function validateSchedule(raw, context = {}, index) {
   }
   if (!isIsoOrNull(raw.firedAt)) fail(`Agendamento "${label}": campo "firedAt" deve ser uma data ISO.`);
   if (!isIsoOrNull(raw.missedAt)) fail(`Agendamento "${label}": campo "missedAt" deve ser uma data ISO.`);
+  const pending = validatePending(raw.pending, label);
 
   if (raw.groupLists !== undefined && raw.groupLists !== null) {
     if (!Array.isArray(raw.groupLists) || raw.groupLists.some((id) => typeof id !== 'string' || !id.trim())) {
@@ -273,6 +333,7 @@ export function validateSchedule(raw, context = {}, index) {
     enabled: raw.enabled ?? true,
     ...(raw.firedAt != null && { firedAt: raw.firedAt }),
     ...(raw.missedAt != null && { missedAt: raw.missedAt }),
+    ...(pending && { pending }),
   };
 }
 
@@ -280,7 +341,7 @@ export function validateSchedule(raw, context = {}, index) {
  * Normaliza o conteúdo do arquivo para o formato v2, aceitando também o v1
  * (mensagem como texto dentro do agendamento).
  * @param {Record<string, unknown>} parsed Objeto já lido do JSON.
- * @returns {{version: 2, defaultGroups: string[], messages: object[], schedules: object[]}}
+ * @returns {{version: 2, defaultGroups: string[], settings: object, groupLists: object[], messages: object[], schedules: object[]}}
  */
 export function normalizeStore(parsed) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -300,6 +361,7 @@ export function normalizeStore(parsed) {
   }
 
   const defaultGroups = normalizeGroups(parsed.defaultGroups ?? []);
+  const settings = validateSettings(parsed.settings);
   const messages = (parsed.messages ?? []).map(validateMessage);
 
   const groupLists = (parsed.groupLists ?? []).map(validateGroupList);
@@ -374,13 +436,13 @@ export function normalizeStore(parsed) {
     seenMessageNames.add(msg.name);
   }
 
-  return { version: 2, defaultGroups, groupLists, messages, schedules };
+  return { version: 2, defaultGroups, settings, groupLists, messages, schedules };
 }
 
 /**
  * Lê e valida o arquivo de agendamentos, resolvendo o texto de cada mensagem.
  * @param {string} [path] Caminho do arquivo (default: config.schedulesPath).
- * @returns {{version: 2, defaultGroups: string[], groupLists: object[], messages: object[], schedules: object[]}}
+ * @returns {{version: 2, defaultGroups: string[], settings: object, groupLists: object[], messages: object[], schedules: object[]}}
  *   Cada agendamento traz também "message" (texto resolvido), "media" e
  *   "targets" (grupos avulsos mais os das listas, sem repetição).
  */

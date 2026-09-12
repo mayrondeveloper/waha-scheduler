@@ -10,7 +10,7 @@ let queue = Promise.resolve();
 /**
  * Lê e valida o arquivo, devolvendo o store no formato v2.
  * @param {string} path Caminho do arquivo.
- * @returns {{version: 2, defaultGroups: string[], messages: object[], schedules: object[]}}
+ * @returns {{version: 2, defaultGroups: string[], settings: object, groupLists: object[], messages: object[], schedules: object[]}}
  */
 export function readStore(path) {
   let raw;
