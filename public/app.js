@@ -836,6 +836,7 @@ async function confirmSend(button, id) {
   } catch (err) {
     toast(`Não foi possível atualizar o histórico: ${err.message}`, 'error');
   }
+  loadClicks();
 }
 
 // ---------- Ações ----------
@@ -1055,6 +1056,8 @@ export function handleClick(evt) {
     state.tab = tab.dataset.tab;
     renderTabs();
     renderTab();
+    // Cliques chegam depois do envio: ao abrir o histórico, pede os atuais.
+    if (state.tab === 'history') loadClicks();
     return;
   }
 
