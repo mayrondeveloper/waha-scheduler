@@ -14,6 +14,9 @@ const TZ = 'America/Sao_Paulo';
 const cfg = { ...config, timezone: TZ };
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// O vigia da sessão consulta o WAHA no boot: nos testes, nunca o real.
+const offlineClient = { async getSession() { throw new Error('offline no teste'); } };
+
 function writeConfig(path, schedule) {
   writeFileSync(path, JSON.stringify({
     version: 2,
@@ -51,7 +54,7 @@ test('envio único vencido dispara uma vez, para a união dos grupos, e grava fi
   const path = newPath();
   writeConfig(path, { at: instantToWall(Date.now() - 60_000, TZ) });
   const { calls, send } = fakeSend();
-  const scheduler = startScheduler({ schedulesPath: path, cfg, tickMs: 40, send });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path, cfg, tickMs: 40, send });
   t.after(() => scheduler.stop());
 
   await delay(150);
@@ -67,7 +70,7 @@ test('vencido há mais que a tolerância vira missedAt sem enviar', async (t) =>
   const path = newPath();
   writeConfig(path, { at: instantToWall(Date.now() - GRACE_MS - 120_000, TZ) });
   const { calls, send } = fakeSend();
-  const scheduler = startScheduler({ schedulesPath: path, cfg, tickMs: 40, send });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path, cfg, tickMs: 40, send });
   t.after(() => scheduler.stop());
 
   await delay(120);
@@ -81,7 +84,7 @@ test('envio único no futuro fica pendente, conta como ativo e aparece no status
   const path = newPath();
   writeConfig(path, { at: instantToWall(Date.now() + 3_600_000, TZ) });
   const { calls, send } = fakeSend();
-  const scheduler = startScheduler({ schedulesPath: path, cfg, tickMs: 40, send });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path, cfg, tickMs: 40, send });
   t.after(() => scheduler.stop());
 
   await delay(100);
@@ -96,7 +99,7 @@ test('recarga com "at" novo reativa um envio único já disparado', async (t) =>
   const path = newPath();
   writeConfig(path, { at: '2026-01-01T10:00', firedAt: '2026-01-01T13:00:00.000Z' });
   const { calls, send } = fakeSend();
-  const scheduler = startScheduler({ schedulesPath: path, cfg, tickMs: 40, send });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path, cfg, tickMs: 40, send });
   t.after(() => scheduler.stop());
   assert.deepEqual(scheduler.activeNames, []);
 
@@ -111,7 +114,7 @@ test('agendamento desabilitado com "at" não dispara', async (t) => {
   const path = newPath();
   writeConfig(path, { at: instantToWall(Date.now() - 30_000, TZ), enabled: false });
   const { calls, send } = fakeSend();
-  const scheduler = startScheduler({ schedulesPath: path, cfg, tickMs: 40, send });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path, cfg, tickMs: 40, send });
   t.after(() => scheduler.stop());
   await delay(100);
   assert.equal(calls.length, 0);

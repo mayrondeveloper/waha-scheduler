@@ -46,7 +46,8 @@ export function error(...args) {
 
 /**
  * Acrescenta uma linha JSON ao log de envios, criando o diretório se necessário.
- * @param {{status: 'sent'|'error', chatId: string, message: string, error?: string}} entry
+ * @param {{status: 'sent'|'error'|'skipped', chatId: string, message: string, error?: string,
+ *          reason?: string, ts?: string}} entry ts: instante, quando quem grava tem um relógio próprio (freio).
  * @param {string} [logPath] Caminho do arquivo (default: config.logPath).
  */
 export function appendSendLog(entry, logPath = config.logPath) {
