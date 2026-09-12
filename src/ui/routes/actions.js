@@ -178,11 +178,14 @@ export const actionRoutes = {
     for (const schedule of store.schedules) {
       if (!schedule.enabled) continue;
       try {
-        // Envio único: o próprio horário, enquanto não tiver disparado nem
-        // sido perdido.
-        nextRuns[schedule.id] = schedule.at
-          ? (dueAction(schedule, now, cfg.timezone) === 'done' ? null : new Date(wallToInstant(schedule.at, cfg.timezone)).toISOString())
-          : nextRunOf(schedule.cron, cfg.timezone);
+        // Adiado pela janela de silêncio: o fim da janela. Envio único: o
+        // próprio horário, enquanto não tiver disparado nem sido perdido.
+        if (schedule.pending) nextRuns[schedule.id] = schedule.pending.at;
+        else if (schedule.at) {
+          nextRuns[schedule.id] = dueAction(schedule, now, cfg.timezone) === 'done'
+            ? null
+            : new Date(wallToInstant(schedule.at, cfg.timezone)).toISOString();
+        } else nextRuns[schedule.id] = nextRunOf(schedule.cron, cfg.timezone);
       } catch (err) {
         error(`Não foi possível calcular o próximo envio de "${schedule.name}": ${err.message}`);
         nextRuns[schedule.id] = null;

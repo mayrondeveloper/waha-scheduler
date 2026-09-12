@@ -47,6 +47,8 @@ function nextText(schedule, nextRuns, timeZone, now) {
   if (schedule.firedAt) return `Enviado em <strong>${escape(formatWhen(schedule.firedAt, { timeZone, now }))}</strong>`;
   if (schedule.missedAt) return `Perdido · o agendador estava parado às ${escape(schedule.at.slice(11))}`;
   if (!schedule.enabled) return 'Próximo: —';
+  // Adiado pela janela de silêncio: sai no fim dela.
+  if (schedule.pending) return `Adiado para <strong>${escape(formatWhen(schedule.pending.at, { timeZone, now }))}</strong> · janela de silêncio`;
   if (!(schedule.id in nextRuns)) return '';
   const next = nextRuns[schedule.id];
   return next ? `Próximo: <strong>${escape(formatWhen(next, { timeZone, now }))}</strong>` : 'Nenhum envio previsto';
@@ -59,6 +61,7 @@ function statusBadge(schedule, last) {
   if (schedule.missedAt) return badge('error', 'Perdido');
   if (last?.failed > 0) return badge('error', 'Falha no envio');
   if (schedule.firedAt) return badge('waiting', 'Enviado');
+  if (schedule.pending) return badge('waiting', 'Adiado');
   return badge('active', 'Ativo');
 }
 
