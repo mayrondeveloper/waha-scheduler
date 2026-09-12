@@ -10,21 +10,23 @@ import { recentEmojis, rememberEmoji } from './emoji.js';
 import { groupDispatches, lastDispatchByName } from './history.js';
 import { statusBar } from './status-view.js';
 import {
-  scheduleList, scheduleForm, formCron, formWhen, formGroups, searchKey, selectedCountLabel, sendConfirm, sendResult,
-  schedulesSubtitle,
+  scheduleList, scheduleForm, formCron, formWhen, formGroups, formGroupLists, unionTargets, searchKey,
+  selectedCountLabel, sendConfirm, sendResult, schedulesSubtitle,
 } from './schedules-view.js';
 import { messageList, messageForm, emojiPanel, messagesSubtitle, bubbleContent } from './messages-view.js';
+import { listsView, listForm, listsSubtitle } from './lists-view.js';
 import { historyView, historySubtitle } from './history-view.js';
 import { classifyMedia, validateFile, mediaStrip } from './media.js';
 
 const STATUS_POLL_MS = 15_000;
 const LOG_LIMIT = 500;
-const TABS = ['schedules', 'messages', 'history'];
+const TABS = ['schedules', 'messages', 'lists', 'history'];
 
 /** Estado da tela. Exportado para os testes. */
 export const state = {
   schedules: [],
   messages: [],
+  groupLists: [],
   groups: [],
   groupsLoaded: false,
   groupsError: null,
@@ -64,6 +66,7 @@ export async function load() {
     api(`/logs?limit=${LOG_LIMIT}`),
   ]);
   Object.assign(state, { schedules, messages, logs });
+  await loadLists();
   await refreshStatus({ quiet: true });
   render();
   await loadGroups();
@@ -72,8 +75,18 @@ export async function load() {
 async function reloadData() {
   const [schedules, messages] = await Promise.all([api('/schedules'), api('/messages')]);
   Object.assign(state, { schedules, messages });
+  await loadLists();
   await refreshStatus({ quiet: true });
   render();
+}
+
+// As listas são apoio: sem elas a tela continua utilizável, com aviso.
+async function loadLists() {
+  try {
+    state.groupLists = await api('/lists');
+  } catch (err) {
+    toast(`Não foi possível carregar as listas de grupos: ${err.message}`, 'error');
+  }
 }
 
 async function loadGroups() {
@@ -91,7 +104,9 @@ async function loadGroups() {
   renderTab();
   // O painel pode ter aberto antes da lista chegar, com o campo de ids
   // digitados. Se ninguém mexeu nele ainda, troca pela lista de grupos.
-  if (state.editing?.type === 'schedule' && drawer().open && !isDirty()) renderScheduleDrawer({ fresh: true });
+  if (!drawer().open || isDirty()) return;
+  if (state.editing?.type === 'schedule') renderScheduleDrawer({ fresh: true });
+  else if (state.editing?.type === 'list') openListEditor(state.editing.data.id);
 }
 
 /**
@@ -151,12 +166,13 @@ function renderTabs() {
   for (const id of TABS) $(`#${id}`).hidden = id !== state.tab;
 }
 
-const TAB_TITLES = { schedules: 'Agendamentos', messages: 'Mensagens', history: 'Histórico' };
+const TAB_TITLES = { schedules: 'Agendamentos', messages: 'Mensagens', lists: 'Grupos', history: 'Histórico' };
 
 function primaryAction() {
   const action = {
     schedules: ['new-schedule', 'Novo agendamento'],
     messages: ['new-message', 'Nova mensagem'],
+    lists: ['new-list', 'Nova lista'],
   }[state.tab];
   return action
     ? `<button type="button" class="btn btn-primary" data-action="${action[0]}">${icon('plus')} ${action[1]}</button>`
@@ -166,6 +182,7 @@ function primaryAction() {
 function pageSubtitle() {
   if (state.tab === 'schedules') return schedulesSubtitle(state.schedules);
   if (state.tab === 'messages') return messagesSubtitle(state.messages);
+  if (state.tab === 'lists') return listsSubtitle(state.groupLists);
   return historySubtitle(groupDispatches(state.logs));
 }
 
@@ -189,9 +206,12 @@ function renderTab() {
       now: now(),
       groupName,
       lastDispatches: lastDispatchByName(groupDispatches(state.logs)),
+      groupLists: state.groupLists,
     });
   } else if (state.tab === 'messages') {
     $('#messages').innerHTML = messageList({ messages: state.messages, schedules: state.schedules });
+  } else if (state.tab === 'lists') {
+    $('#lists').innerHTML = listsView({ groupLists: state.groupLists, schedules: state.schedules, groupName });
   } else {
     $('#history').innerHTML = historyView({
       dispatches: groupDispatches(state.logs),
@@ -287,10 +307,21 @@ function renderScheduleDrawer({ fresh = false } = {}) {
     timezoneLabel: state.status?.timezoneLabel,
     media,
     mediaSrc: src,
+    groupLists: state.groupLists,
   }), { fresh });
   const data = state.editing.data;
   if (whenModeOf(data) === 'once') showOncePreview(data.at ?? '');
   else updatePreview(data.cron ?? '');
+}
+
+/**
+ * Abre o painel de lista de grupos: nova (sem id) ou edição.
+ * @param {string} [id]
+ */
+export function openListEditor(id) {
+  const data = id ? structuredClone(state.groupLists.find((l) => l.id === id)) : { name: '', groups: [] };
+  state.editing = { type: 'list', data, composing: false, snapshot: '' };
+  showDrawer(listForm({ list: data, groups: state.groups, groupsError: state.groupsError }), { fresh: true });
 }
 
 // Modo do bloco "Quando" do agendamento em edição: o que a tela guardou ao
@@ -352,6 +383,7 @@ function captureScheduleForm() {
   data.name = fieldValue(form, 'name');
   applyWhen(data, formWhen(form));
   data.groups = formGroups(form);
+  data.groupLists = formGroupLists(form);
   const messageId = fieldValue(form, 'messageId');
   if (messageId) data.messageId = messageId;
 }
@@ -457,9 +489,20 @@ function filterGroups(input) {
   });
 }
 
+// Contador da união (grupos avulsos e os das listas marcadas) e a marca
+// "já na lista" nos grupos que uma lista marcada cobre.
 function updateGroupCount(form) {
+  const union = unionTargets({ groups: formGroups(form), groupLists: formGroupLists(form) }, state.groupLists);
   const counter = form.querySelector('#groups-count');
-  if (counter) counter.textContent = selectedCountLabel(form.querySelectorAll('input[name="group"]:checked').length);
+  if (counter) counter.textContent = selectedCountLabel(union.length);
+
+  const covered = new Set(unionTargets({ groups: [], groupLists: formGroupLists(form) }, state.groupLists));
+  for (const label of form.querySelectorAll('.group[data-group]')) {
+    const isCovered = covered.has(label.dataset.group);
+    label.classList.toggle('is-covered', isCovered);
+    const mark = label.querySelector('.covered');
+    if (mark) mark.hidden = !isCovered;
+  }
 }
 
 function updateMessagePreview(select) {
@@ -619,7 +662,7 @@ function openSendModal(id) {
   const schedule = state.schedules.find((s) => s.id === id);
   const message = state.messages.find((m) => m.id === schedule.messageId);
   const m = modal();
-  m.innerHTML = sendConfirm({ schedule, message, groupName });
+  m.innerHTML = sendConfirm({ schedule, message, groupName, groupLists: state.groupLists });
   m.returnValue = '';
   m.showModal();
 }
@@ -735,7 +778,7 @@ async function saveSchedule(form) {
   if ('at' in when && !when.at) throw new Error('Informe a data e o horário do envio único.');
   if ('cron' in when && !when.cron) throw new Error('Selecione ao menos um dia da semana e o horário.');
   const groups = formGroups(form);
-  const groupLists = state.editing.data.groupLists ?? [];
+  const groupLists = formGroupLists(form);
   // A API recusa lista vazia com 400. Barrar aqui evita a ida e volta e
   // deixa claro que desmarcar tudo não significa "herda os defaults".
   if (groups.length === 0 && groupLists.length === 0) throw new Error('Selecione ao menos um grupo de destino.');
@@ -778,6 +821,34 @@ async function saveSchedule(form) {
   const name = editing.data.name.trim();
   closeDrawer();
   toast(`Agendamento "${name}" salvo`);
+  await reloadData();
+}
+
+async function saveList(form) {
+  const groups = formGroups(form);
+  if (groups.length === 0) throw new Error('Selecione ao menos um grupo para a lista.');
+  const payload = { name: fieldValue(form, 'name'), groups };
+  const id = state.editing.data.id;
+  await api(id ? `/lists/${encodeURIComponent(id)}` : '/lists', {
+    method: id ? 'PUT' : 'POST',
+    body: JSON.stringify(payload),
+  });
+  closeDrawer();
+  toast(`Lista "${payload.name.trim()}" salva`);
+  await reloadData();
+}
+
+async function deleteList(id) {
+  const list = state.groupLists.find((l) => l.id === id);
+  const ok = await confirmDialog({
+    title: `Excluir "${list.name}"?`,
+    body: 'A lista some do cadastro. Se algum agendamento usa ela, a exclusão é recusada.',
+    confirm: 'Excluir',
+    danger: true,
+  });
+  if (!ok) return;
+  await api(`/lists/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  toast(`Lista "${list.name}" excluída`);
   await reloadData();
 }
 
@@ -852,6 +923,9 @@ export function handleClick(evt) {
     edit: () => openScheduleEditor(id),
     'new-message': () => openMessageEditor(),
     'edit-message': () => openMessageEditor(id),
+    'new-list': () => openListEditor(),
+    'edit-list': () => openListEditor(id),
+    'delete-list': () => guarded(() => deleteList(id)),
     'close-drawer': () => requestCloseDrawer(),
     'close-modal': () => modal().close(),
     'compose-message': () => {
@@ -912,7 +986,7 @@ export function handleInput(evt) {
 
 function handleChange(evt) {
   const target = evt.target;
-  if (target.name === 'group') {
+  if (target.name === 'group' || target.name === 'groupList') {
     updateGroupCount(target.form);
   } else if (target.name === 'messageId') {
     updateMessagePreview(target);
@@ -978,6 +1052,7 @@ export async function handleSubmit(evt) {
   try {
     if (form.id === 'form-schedule') await saveSchedule(form);
     else if (form.id === 'form-message') await saveMessage(form);
+    else if (form.id === 'form-list') await saveList(form);
   } catch (err) {
     showFormError(drawer(), err.message);
   } finally {

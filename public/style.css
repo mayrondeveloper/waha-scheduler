@@ -293,7 +293,7 @@ main { padding-top: var(--spacing-xl); }
 .rows > li { border-bottom: 1px solid var(--border-subtle); }
 .rows > li:last-child { border-bottom: 0; }
 .row { display: grid; align-items: center; gap: 6px var(--spacing-lg); padding: 14px 18px; }
-.message-row { grid-template-columns: minmax(0, 1fr) 14rem auto; }
+.message-row, .list-row { grid-template-columns: minmax(0, 1fr) 14rem auto; }
 .row-main { min-width: 0; }
 .row-title {
   background: none; border: 0; padding: 0; text-align: left; overflow-wrap: anywhere;
@@ -412,6 +412,10 @@ select {
 .group input { width: 16px; height: 16px; flex: none; margin: 0; accent-color: var(--green-400); }
 .group-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
+.list-picks { max-height: none; margin-bottom: 8px; }
+.group-list-pick .group-name { font-weight: 500; }
+.group.is-covered .group-name { color: var(--text-tertiary); }
+.group .covered { font-size: 11px; color: var(--text-tertiary); }
 .group-missing, .group-missing .group-name { color: var(--status-error-text); }
 .group-missing input { accent-color: var(--status-error); }
 .group-missing .warn { font-size: 11px; font-weight: 500; }
@@ -589,8 +593,8 @@ select {
   .container { padding-left: var(--spacing-lg); padding-right: var(--spacing-lg); }
   .card { grid-template-columns: auto minmax(0, 1fr); }
   .card-actions { grid-column: 1 / -1; justify-content: flex-start; }
-  .message-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .message-row .row-sub { grid-column: 1; }
+  .message-row, .list-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .message-row .row-sub, .list-row .row-sub { grid-column: 1; }
   .dispatch > summary { grid-template-columns: auto minmax(0, 1fr) auto; }
   .dispatch-when, .dispatch-count { grid-column: 2; justify-self: start; }
   .dispatch-entries { padding-left: 18px; }
