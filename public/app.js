@@ -128,8 +128,11 @@ export async function refreshStatus({ quiet = false } = {}) {
 
   renderStatus();
   if (JSON.stringify(state.status?.nextRuns ?? null) !== before) {
+    // Um disparo aconteceu: o histórico ganhou linhas e um envio único pode
+    // ter virado "Enviado" ou "Perdido" no arquivo.
     try {
-      state.logs = await api(`/logs?limit=${LOG_LIMIT}`);
+      const [logs, schedules] = await Promise.all([api(`/logs?limit=${LOG_LIMIT}`), api('/schedules')]);
+      Object.assign(state, { logs, schedules });
     } catch (err) {
       toast(`Não foi possível atualizar o histórico: ${err.message}`, 'error');
     }
@@ -229,9 +232,13 @@ function toast(message, tone = 'ok') {
   el.innerHTML = `<span>${escape(message)}</span>${tone === 'error'
     ? `<button type="button" class="icon-btn" data-action="dismiss-toast" aria-label="Fechar aviso">${icon('x')}</button>`
     : ''}`;
-  // O aviso de sucesso some sozinho, pela animação do CSS; o de erro fica
-  // até ser fechado.
-  el.addEventListener('animationend', () => el.remove());
+  // O aviso de sucesso some sozinho, pela animação de saída do CSS; o de
+  // erro fica até ser fechado. Só a animação de SAÍDA remove: a de entrada
+  // também dispara animationend, e removia o aviso de erro assim que ele
+  // acabava de aparecer.
+  el.addEventListener('animationend', (evt) => {
+    if (evt.animationName === 'toast-out') el.remove();
+  });
   $('#toasts').append(el);
 }
 

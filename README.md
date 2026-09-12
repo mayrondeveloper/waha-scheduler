@@ -100,6 +100,19 @@ cron sozinho (Seg, Qua e Sex às 09:00 viram `0 9 * * 1,3,5`). Um cron editado
 à mão que não cabe nesse formato aparece cru no formulário e é mantido como
 está ao salvar.
 
+O bloco "Quando" também aceita **Uma vez**: uma data e um horário para um
+envio único, no fuso de `TIMEZONE`. O agendador confere os envios únicos a
+cada 30 segundos; depois de sair, o card mostra "Enviado" com a hora. Se o
+agendador estava parado no horário, ele ainda envia até 10 minutos de atraso;
+além disso, marca "Perdido" e explica o motivo (o "Enviar agora" continua
+disponível). Mudar a data de um envio já feito o reativa.
+
+A aba **Grupos** guarda listas de grupos ("Ofertas SP", "Todos os de
+livros"): um agendamento escolhe listas, grupos avulsos ou os dois, e o
+destino é a união. Mudar a lista muda os próximos envios de quem a usa; uma
+lista em uso não pode ser excluída. **Duplicar**, no menu do card e na linha
+da mensagem, abre o editor preenchido com "(cópia)" no nome.
+
 No topo, uma faixa mostra se o agendador (`npm start`) está rodando, se o
 WAHA respondeu e qual é o próximo envio. É ela que avisa quando um agendamento
 não vai sair porque o agendador está parado. O agendador grava um sinal de vida
@@ -189,6 +202,9 @@ propague para agendamentos já salvos pela tela.
 ```json
 {
   "defaultGroups": ["123456789@g.us"],
+  "groupLists": [
+    { "id": "lst-3a9f1c2e", "name": "Ofertas SP", "groups": ["123456789@g.us", "987654321@g.us"] }
+  ],
   "messages": [
     {
       "id": "msg-a1b2c3d4",
@@ -210,6 +226,15 @@ propague para agendamentos já salvos pela tela.
       "cron": "0 9 * * 1",
       "messageId": "msg-a1b2c3d4",
       "groups": ["123456789@g.us"],
+      "groupLists": ["lst-3a9f1c2e"],
+      "enabled": true
+    },
+    {
+      "id": "sch-9c8d7e6f",
+      "name": "promo-de-sabado",
+      "at": "2026-09-19T10:00",
+      "messageId": "msg-a1b2c3d4",
+      "groupLists": ["lst-3a9f1c2e"],
       "enabled": true
     }
   ]
@@ -227,10 +252,19 @@ propague para agendamentos já salvos pela tela.
   de forma estável entre gravações.
 - `name` — obrigatório e único (entre agendamentos, e separadamente entre
   mensagens); identifica o agendamento nos logs.
-- `cron` — obrigatório; validado na inicialização. Um cron inválido aborta o
-  processo apontando o agendamento problemático.
+- `groupLists` (na raiz) — listas de grupos reutilizáveis; cada uma tem `id`
+  (gerado quando ausente), `name` único e `groups` com ao menos um id.
+- `cron` ou `at` — exatamente um dos dois. `cron` é validado na inicialização;
+  um cron inválido aborta o processo apontando o agendamento problemático.
+  `at` é um envio único, hora de parede no fuso `TIMEZONE`, no formato
+  `AAAA-MM-DDTHH:MM`. O agendador grava `firedAt` quando o envio único sai e
+  `missedAt` quando o horário passou há mais de 10 minutos sem ele rodar; a
+  tela limpa os dois ao trocar a data.
 - `messageId` — obrigatório; precisa apontar para um `id` existente em
   `messages`.
+- `groupLists` (no agendamento) — opcional; ids de listas. O destino é a união
+  dos `groups` com os grupos das listas, sem repetição. Com uma lista, `groups`
+  pode ser `[]`.
 - `groups` — opcional; quando **ausente**, herda `defaultGroups`. Informado como
   **lista vazia** é erro — desmarcar todos os grupos na tela não vira "herda os
   defaults", e sim uma recusa explícita.
