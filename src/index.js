@@ -6,34 +6,50 @@ import { schedule as scheduleCron } from 'node-cron';
 import { config } from './config.js';
 import { loadSchedules, dueAction, GRACE_MS } from './schedules.js';
 import { broadcast } from './broadcast.js';
-import { info, warn, error, success } from './logger.js';
+import { info, warn, error, success, appendSendLog } from './logger.js';
 import { statusPathFor, writeStatus, removeStatus, HEARTBEAT_MS } from './scheduler-status.js';
 import { mediaDirFor, mediaPath } from './media.js';
 import { updateStore } from './store.js';
+import { inQuietHours, quietEnd } from './quiet.js';
+import { sendAlert } from './alerts.js';
+import * as wahaClient from './waha/client.js';
 
 export { dueAction, GRACE_MS };
 
 const RELOAD_DEBOUNCE_MS = 200;
 
-/** Intervalo com que o agendador confere os envios únicos vencidos. */
+/** Intervalo com que o agendador confere os envios únicos e os adiados. */
 export const TICK_MS = 30_000;
 
-// Envios únicos que ainda podem disparar: habilitados, sem resultado.
+/** Intervalo com que o agendador consulta a sessão do WAHA. */
+export const SESSION_POLL_MS = 60_000;
+
+// Envios únicos que ainda podem disparar: habilitados, sem resultado e sem
+// adiamento em curso (o adiado é tratado pela lista de pendentes).
 function pendingOneShots(schedules) {
-  return schedules.filter((s) => s.at && s.enabled && !s.firedAt && !s.missedAt);
+  return schedules.filter((s) => s.at && s.enabled && !s.firedAt && !s.missedAt && !s.pending);
+}
+
+// Disparos adiados pela janela de silêncio, de qualquer tipo de agendamento.
+function deferred(schedules) {
+  return schedules.filter((s) => s.pending && s.enabled);
 }
 
 /**
  * Registra os agendamentos de um arquivo e permite recarregá-los.
  * Na recarga, uma configuração inválida preserva a anterior — diferente do
  * boot, onde ela aborta o processo. Enquanto roda, grava o arquivo de status
- * que a tela lê para saber se os envios vão sair. Os envios únicos ("at")
- * são conferidos por um tique periódico, e o resultado (disparado ou
- * perdido) é gravado no próprio arquivo de agendamentos.
+ * que a tela lê para saber se os envios vão sair. Os envios únicos ("at") e
+ * os adiados pela janela de silêncio ("pending") são conferidos por um tique
+ * periódico, e o resultado é gravado no próprio arquivo de agendamentos. Um
+ * vigia consulta a sessão do WAHA e avisa o dono quando ela cai ou volta.
  * @param {{schedulesPath?: string, cfg?: object, statusPath?: string, heartbeatMs?: number,
- *          tickMs?: number, send?: Function, now?: () => number}} [options]
- *   send: implementação do envio (default: broadcast), injetável nos testes.
- * @returns {{reload: () => boolean, stop: () => void, tick: () => Promise<void>, activeNames: string[]}}
+ *          tickMs?: number, sessionPollMs?: number, send?: Function, client?: object,
+ *          fetchImpl?: typeof fetch, now?: () => number}} [options]
+ *   send: implementação do envio (default: broadcast); client: cliente do
+ *   WAHA (default: o real); fetchImpl: para a URL de push. Injetáveis nos testes.
+ * @returns {{reload: () => boolean, stop: () => void, tick: () => Promise<void>,
+ *            pollSession: () => Promise<void>, activeNames: string[]}}
  */
 export function startScheduler(options = {}) {
   const {
@@ -42,14 +58,22 @@ export function startScheduler(options = {}) {
     statusPath = statusPathFor(schedulesPath),
     heartbeatMs = HEARTBEAT_MS,
     tickMs = TICK_MS,
+    sessionPollMs = SESSION_POLL_MS,
     send = broadcast,
+    client = wahaClient,
+    fetchImpl = fetch,
     now = Date.now,
   } = options;
   let tasks = [];
   let oneShots = [];
+  let pendings = [];
+  let settings = null;
+  let session = { status: null, me: null, checkedAt: null, error: null };
   const startedAt = new Date().toISOString();
   let reloadError = null;
   let statusFailing = false;
+
+  const iso = (ms) => new Date(ms).toISOString();
 
   // Status é informação para a tela, nunca motivo para derrubar o
   // agendador: a falha ao gravar é logada uma vez e os disparos seguem.
@@ -58,9 +82,12 @@ export function startScheduler(options = {}) {
       writeStatus(statusPath, {
         pid: process.pid,
         startedAt,
-        beatAt: new Date().toISOString(),
-        active: [...tasks.map((t) => t.name), ...oneShots.map((s) => s.name)],
+        beatAt: iso(now()),
+        active: activeNames(),
         oneShots: oneShots.map((s) => s.name),
+        pending: pendings.map((s) => s.name),
+        paused: Boolean(settings?.paused),
+        waha: session,
         reloadError,
       });
       if (statusFailing) info(`Status do agendador voltou a ser gravado em ${statusPath}.`);
@@ -71,9 +98,18 @@ export function startScheduler(options = {}) {
     }
   }
 
+  function activeNames() {
+    return [...new Set([...tasks.map((t) => t.name), ...oneShots.map((s) => s.name), ...pendings.map((s) => s.name)])];
+  }
+
+  // Alerta ao dono: disparar e esquecer, nunca derruba nem atrasa nada.
+  function alert(channels, title, text) {
+    return sendAlert({ title, text, channels }, { settings, cfg, client, me: session.me, fetchImpl });
+  }
+
   // Dispara um agendamento (pelo cron ou pelo tique), sem deixar erro subir:
   // uma falha no envio é logada, e o processo segue com os demais.
-  async function dispatch(item) {
+  async function dispatch(item, extra = {}) {
     info(`Disparando agendamento "${item.name}" para ${item.targets.length} grupo(s).`);
     try {
       // O anexo é lido do disco na hora do disparo, pelo caminho que
@@ -81,47 +117,132 @@ export function startScheduler(options = {}) {
       const media = item.media
         ? { ...item.media, path: mediaPath(mediaDirFor(schedulesPath), item.media) }
         : null;
-      const { sent, failed } = await send(item.message, item.targets, {
+      const result = await send(item.message, item.targets, {
         cfg,
         label: item.name,
         media,
+        hourlyLimit: settings?.hourlyLimit ?? 0,
+        extra,
       });
+      const { sent, failed } = result;
       success(`Agendamento "${item.name}": ${sent} enviada(s), ${failed} falha(s).`);
+      if (failed > 0) {
+        const first = (result.results ?? []).find((r) => r.status === 'error')?.error ?? 'falha sem detalhe';
+        await alert(['whatsapp', 'push'], `Falha no envio: ${item.name}`,
+          `${failed} de ${sent + failed} grupo(s) falharam. Primeiro erro: ${first}`);
+      }
     } catch (err) {
       error(`Agendamento "${item.name}" falhou: ${err.message}`);
+      await alert(['whatsapp', 'push'], `Falha no envio: ${item.name}`, err.message);
     }
   }
 
-  // Grava o resultado de um envio único no arquivo. A gravação dispara o
-  // watcher e uma recarga, que é inofensiva: ela só reflete o que já está
-  // em memória.
-  async function markOneShot(id, field) {
+  // Pausado: o disparo não sai, e o histórico diz que não saiu e por quê.
+  function skip(item, reason) {
+    warn(`Agendamento "${item.name}" não disparou: envios pausados.`);
+    for (const chatId of item.targets) {
+      appendSendLog({ status: 'skipped', chatId, message: item.message, label: item.name, reason }, cfg.logPath);
+    }
+  }
+
+  // Janela de silêncio: grava o adiamento no arquivo (sobrevive a reinício)
+  // e o tique dispara no fim da janela. Um cron que dispara de novo com um
+  // adiamento já pendente não empilha outro.
+  async function defer(item, nowMs) {
+    const at = iso(quietEnd(nowMs, settings.quietHours, cfg.timezone));
+    const pending = { at, from: iso(nowMs), reason: 'quiet' };
+    let added = false;
+    try {
+      await updateStore(schedulesPath, (store) => {
+        const target = store.schedules.find((s) => s.id === item.id);
+        if (target && !target.pending) {
+          target.pending = pending;
+          added = true;
+        }
+        return store;
+      });
+    } catch (err) {
+      error(`Agendamento "${item.name}" caiu na janela de silêncio, mas o adiamento não pôde ser gravado: ${err.message}. Este disparo não vai sair.`);
+      return;
+    }
+    if (!added) {
+      info(`Agendamento "${item.name}" caiu na janela de silêncio e já tem um adiamento pendente: este disparo não empilha.`);
+      return;
+    }
+    oneShots = oneShots.filter((s) => s.id !== item.id);
+    pendings = [...pendings.filter((s) => s.id !== item.id), { ...item, pending }];
+    info(`Agendamento "${item.name}" caiu na janela de silêncio: adiado para ${at}.`);
+    beat();
+  }
+
+  // O que o cron chama.
+  async function fire(item) {
+    const nowMs = now();
+    if (settings?.paused) return skip(item, 'paused');
+    if (inQuietHours(nowMs, settings?.quietHours, cfg.timezone)) return defer(item, nowMs);
+    await dispatch(item);
+  }
+
+  // Grava campos de um agendamento no arquivo. A gravação dispara o watcher
+  // e uma recarga, que é inofensiva: ela só reflete o que já está em memória.
+  async function mark(id, fields) {
     await updateStore(schedulesPath, (store) => {
       const target = store.schedules.find((s) => s.id === id);
-      if (target) target[field] = new Date(now()).toISOString();
+      if (target) {
+        for (const [key, value] of Object.entries(fields)) {
+          if (value === null) delete target[key];
+          else target[key] = value;
+        }
+      }
       return store;
     });
   }
 
-  let ticking = false;
+  let inFlight = null;
 
-  // Confere os envios únicos vencidos. O resultado é gravado ANTES do envio,
-  // para um tique seguinte (ou um reinício no meio) não disparar de novo.
-  async function tick() {
-    if (ticking) return;
-    ticking = true;
+  // Confere os adiados e os envios únicos vencidos. O resultado é gravado
+  // ANTES do envio, para um tique seguinte (ou um reinício no meio) não
+  // disparar de novo. Pausado, nada é avaliado: tudo espera a retomada.
+  // Um tique chamado durante outro espera o que está em curso.
+  function tick() {
+    if (!inFlight) inFlight = runTick().finally(() => { inFlight = null; });
+    return inFlight;
+  }
+
+  async function runTick() {
     try {
+      if (settings?.paused) return;
+      const nowMs = now();
+
+      for (const item of [...pendings]) {
+        if (Date.parse(item.pending.at) > nowMs) continue;
+        pendings = pendings.filter((s) => s.id !== item.id);
+        try {
+          await mark(item.id, { pending: null, ...(item.at && { firedAt: iso(nowMs) }) });
+        } catch (err) {
+          error(`Não foi possível gravar o fim do adiamento de "${item.name}": ${err.message}. O envio não vai sair.`);
+          continue;
+        }
+        await dispatch(item, { deferredFrom: item.pending.from });
+      }
+
       for (const item of [...oneShots]) {
-        const action = dueAction(item, now(), cfg.timezone);
+        const action = dueAction(item, nowMs, cfg.timezone);
         if (action === 'wait' || action === 'done') continue;
+        if (action === 'fire' && inQuietHours(nowMs, settings?.quietHours, cfg.timezone)) {
+          await defer(item, nowMs);
+          continue;
+        }
         oneShots = oneShots.filter((s) => s.id !== item.id);
         try {
           if (action === 'missed') {
-            await markOneShot(item.id, 'missedAt');
+            await mark(item.id, { missedAt: iso(nowMs) });
             warn(`Envio único "${item.name}" perdido: o horário ${item.at} passou há mais de ${GRACE_MS / 60_000} minutos.`);
+            await alert(['whatsapp', 'push'], `Envio único perdido: ${item.name}`,
+              `O horário ${item.at} passou há mais de ${GRACE_MS / 60_000} minutos com o agendador parado. Use "Enviar agora" se ainda valer.`);
             continue;
           }
-          await markOneShot(item.id, 'firedAt');
+          await mark(item.id, { firedAt: iso(nowMs) });
         } catch (err) {
           error(`Não foi possível gravar o resultado do envio único "${item.name}": ${err.message}. O envio não vai sair.`);
           continue;
@@ -129,12 +250,41 @@ export function startScheduler(options = {}) {
         await dispatch(item);
       }
     } finally {
-      ticking = false;
       beat();
     }
   }
 
-  function register(schedules) {
+  // Vigia da sessão: transição de conectado para outro estado avisa pela URL
+  // de push (o WhatsApp não consegue avisar de si mesmo); a volta avisa nos
+  // dois canais. A primeira consulta é só a linha de base.
+  async function pollSession() {
+    let next;
+    try {
+      const { status, me } = await client.getSession(cfg);
+      next = { status, me, checkedAt: iso(now()), error: null };
+    } catch (err) {
+      next = { status: null, me: session.me, checkedAt: iso(now()), error: err.message };
+    }
+    const first = session.checkedAt === null;
+    const wasUp = session.status === 'WORKING';
+    const isUp = next.status === 'WORKING';
+    session = next;
+    beat();
+    if (first) return;
+    if (wasUp && !isUp) {
+      const state = next.status ?? 'inacessível';
+      warn(`Sessão "${cfg.session}" do WAHA saiu do ar: ${state}${next.error ? ` (${next.error})` : ''}.`);
+      await alert(['push'], 'Número desconectado',
+        `A sessão "${cfg.session}" está ${state}${next.error ? `: ${next.error}` : ''}. Nada sai até ela reconectar.`);
+    } else if (!wasUp && isUp) {
+      success(`Sessão "${cfg.session}" do WAHA voltou a funcionar.`);
+      await alert(['whatsapp', 'push'], 'Número reconectado', `A sessão "${cfg.session}" voltou a funcionar. Os envios seguem normalmente.`);
+    }
+  }
+
+  function register(loaded) {
+    settings = loaded.settings;
+    const schedules = loaded.schedules;
     // Monta a nova geração de tasks ANTES de tocar na anterior: se algo
     // falhar no meio do laço, a config antiga continua intacta e ativa —
     // é o que permite reload() preservá-la em vez de ficar com um estado
@@ -147,6 +297,10 @@ export function startScheduler(options = {}) {
         warn(`Agendamento "${item.name}" está desabilitado — ignorado.`);
         continue;
       }
+      if (item.pending) {
+        info(`Agendamento "${item.name}" tem envio adiado para ${item.pending.at} (janela de silêncio).`);
+        if (item.at) continue;
+      }
       if (item.at) {
         if (item.firedAt || item.missedAt) continue;
         info(`Envio único "${item.name}" pendente para ${item.at} (${item.targets.length} grupo(s)).`);
@@ -155,7 +309,7 @@ export function startScheduler(options = {}) {
 
       let task;
       try {
-        task = scheduleCron(item.cron, () => dispatch(item), { timezone: cfg.timezone });
+        task = scheduleCron(item.cron, () => fire(item), { timezone: cfg.timezone });
       } catch (err) {
         // Descarta o que já foi criado nesta tentativa (não é nem a
         // geração antiga, nem uma nova geração válida) e propaga com o
@@ -164,7 +318,7 @@ export function startScheduler(options = {}) {
         throw new Error(`Agendamento "${item.name}": falha ao registrar - ${err.message}`);
       }
 
-      newTasks.push({ name: item.name, task });
+      newTasks.push({ name: item.name, id: item.id, item, task });
       info(`Agendamento "${item.name}" registrado: "${item.cron}" (${item.targets.length} grupo(s)).`);
     }
 
@@ -176,10 +330,12 @@ export function startScheduler(options = {}) {
     for (const { task } of tasks) task.destroy();
     tasks = newTasks;
     oneShots = pendingOneShots(schedules);
+    pendings = deferred(schedules);
+    if (settings.paused) warn('Envios pausados nos ajustes: nenhum disparo sai até a retomada.');
   }
 
   // Primeira carga: deixa o erro subir, para o boot poder abortar.
-  register(loadSchedules(schedulesPath).schedules);
+  register(loadSchedules(schedulesPath));
   beat();
   // unref: os timers sozinhos não mantêm o processo vivo — quem mantém são
   // os crons e o watcher do arquivo. Um envio único pendente sem cron
@@ -191,12 +347,15 @@ export function startScheduler(options = {}) {
   // Um envio único já vencido dispara logo no boot, não daqui a um tique.
   const firstTick = setTimeout(tick, 0);
   firstTick.unref();
+  const sessionPoll = setInterval(pollSession, sessionPollMs);
+  sessionPoll.unref();
+  const firstPoll = setTimeout(pollSession, 0);
+  firstPoll.unref();
 
   return {
     reload() {
       try {
-        const loaded = loadSchedules(schedulesPath);
-        register(loaded.schedules);
+        register(loadSchedules(schedulesPath));
       } catch (err) {
         error(`Recarga ignorada, mantendo a configuração anterior: ${err.message}`);
         reloadError = err.message;
@@ -205,16 +364,19 @@ export function startScheduler(options = {}) {
       }
       reloadError = null;
       beat();
-      success(`Configuração recarregada: ${tasks.length + oneShots.length} agendamento(s) ativo(s).`);
+      success(`Configuração recarregada: ${activeNames().length} agendamento(s) ativo(s).`);
       return true;
     },
     stop() {
       clearInterval(heartbeat);
       clearInterval(ticker);
       clearTimeout(firstTick);
+      clearInterval(sessionPoll);
+      clearTimeout(firstPoll);
       for (const { task } of tasks) task.destroy();
       tasks = [];
       oneShots = [];
+      pendings = [];
       try {
         removeStatus(statusPath);
       } catch (err) {
@@ -222,8 +384,16 @@ export function startScheduler(options = {}) {
       }
     },
     tick,
+    pollSession,
+    // O que o cron chamaria para este agendamento, agora. Para os testes:
+    // o cron de verdade só dispara no minuto certo.
+    fire(id) {
+      const found = tasks.find((t) => t.id === id);
+      if (!found) throw new Error(`Agendamento "${id}" não está registrado no cron.`);
+      return fire(found.item);
+    },
     get activeNames() {
-      return [...tasks.map((t) => t.name), ...oneShots.map((s) => s.name)];
+      return activeNames();
     },
   };
 }

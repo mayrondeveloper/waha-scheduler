@@ -5,6 +5,7 @@ import { escape, icon } from './html.js';
 import { formatWhatsApp } from './whatsapp.js';
 import { EMOJI_CATEGORIES } from './emoji.js';
 import { mediaPreview, mediaChip, mediaStrip } from './media.js';
+import { firstVariant, variantsHint } from './spintax.js';
 
 const EMPTY_PREVIEW = '<span class="muted">A prévia aparece aqui.</span>';
 
@@ -29,7 +30,9 @@ const FORMAT_BUTTONS = [
  * @returns {string}
  */
 export function bubbleContent({ text, media = null, mediaSrc = '' }) {
-  const body = text.trim() ? formatWhatsApp(text) : (media ? '' : EMPTY_PREVIEW);
+  // Com spintax, a prévia mostra a primeira variação; o aviso de quantas
+  // existem fica fora do balão.
+  const body = text.trim() ? formatWhatsApp(firstVariant(text)) : (media ? '' : EMPTY_PREVIEW);
   return `${media ? mediaPreview(media, mediaSrc) : ''}${body}`;
 }
 
@@ -64,6 +67,7 @@ export function messageEditor({ nameField, textField, name = '', text = '', medi
         <div class="editor-preview">
           <p class="hint">Como chega no grupo</p>
           <div class="chat"><div class="bubble" data-role="editor-preview">${bubbleContent({ text, media, mediaSrc })}</div></div>
+          <p class="hint variants" data-role="variants" ${variantsHint(text) ? '' : 'hidden'}>${escape(variantsHint(text))}</p>
         </div>
       </div>
     </div>`;
@@ -121,7 +125,7 @@ export function messageList({ messages, schedules }) {
       <li class="row message-row">
         <div class="row-main">
           <button type="button" class="row-title" data-action="edit-message" data-id="${id}">${escape(m.name)}</button>
-          <div class="message-snippet">${formatWhatsApp(m.text)}</div>
+          <div class="message-snippet">${formatWhatsApp(firstVariant(m.text))}</div>
           ${m.media ? mediaChip(m.media) : ''}
         </div>
         <div class="row-sub">${usedBy.length ? `Usada por ${escape(usedBy.join(', '))}` : 'Não usada'}</div>

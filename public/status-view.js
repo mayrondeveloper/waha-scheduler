@@ -1,7 +1,7 @@
 // Faixa de status da tela: agendador, WAHA e próximo envio. Só gera HTML.
 
 import { escape, icon } from './html.js';
-import { formatWhen } from './dates.js';
+import { formatWhen, formatTime } from './dates.js';
 
 /**
  * Qual aviso do agendador mostrar. Quando mais de um se aplica, vale o
@@ -78,12 +78,21 @@ export function statusBar(input) {
     ? { tone: 'warn', text: 'WAHA indisponível', detail: groupsError }
     : groupsLoaded ? { tone: 'ok', text: 'WAHA conectado' } : { tone: 'neutral', text: 'Verificando o WAHA…' };
 
-  // Com o agendador parado, "próximo envio" enganaria: nada vai sair.
-  const running = notice.tone === 'ok' || notice.tone === 'warn';
+  // Pausa geral e janela de silêncio vêm dos ajustes, pelo status.
+  const paused = Boolean(status?.paused);
+  const pausedHtml = paused
+    ? `<span class="status-item tone-danger"><span class="dot" aria-hidden="true"></span><span>Envios pausados</span><button type="button" class="link" data-action="resume-all">Retomar</button></span>`
+    : '';
+  const quietHtml = status?.quietUntil
+    ? item({ tone: 'neutral', text: `Janela de silêncio até ${formatTime(status.quietUntil, { timeZone: status.timezone })}`, detail: 'disparos ficam adiados' })
+    : '';
+
+  // Com o agendador parado ou tudo pausado, "próximo envio" enganaria: nada vai sair.
+  const running = (notice.tone === 'ok' || notice.tone === 'warn') && !paused;
   const next = running && status ? nextDispatch(schedules, status.nextRuns) : null;
   const nextHtml = next
     ? `<span class="status-next">${icon('clock')} Próximo envio: ${escape(formatWhen(next.at, { timeZone: status.timezone, now }))}, ${escape(next.schedule.name)}</span>`
     : '';
 
-  return `${item(notice, notice.tone === 'ok')}${item(waha)}${nextHtml}`;
+  return `${item(notice, notice.tone === 'ok')}${item(waha)}${pausedHtml}${quietHtml}${nextHtml}`;
 }

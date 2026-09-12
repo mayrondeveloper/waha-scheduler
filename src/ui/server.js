@@ -14,6 +14,7 @@ import { messageRoutes } from './routes/messages.js';
 import { scheduleRoutes } from './routes/schedules.js';
 import { actionRoutes } from './routes/actions.js';
 import { listRoutes } from './routes/lists.js';
+import { settingsRoutes } from './routes/settings.js';
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
 const MAX_BODY_BYTES = 1_000_000;
@@ -56,6 +57,8 @@ const STATIC_FILES = {
   '/history-view.js': ['history-view.js', JS],
   '/media.js': ['media.js', JS],
   '/lists-view.js': ['lists-view.js', JS],
+  '/spintax.js': ['spintax.js', JS],
+  '/settings-view.js': ['settings-view.js', JS],
   // Fontes do design system, embutidas: a tela não carrega nada da internet.
   '/fonts/geist.woff2': ['fonts/geist.woff2', 'font/woff2'],
   '/fonts/geist-mono.woff2': ['fonts/geist-mono.woff2', 'font/woff2'],
@@ -195,7 +198,7 @@ export function createServer(options = {}) {
   // As rotas da aplicação vêm primeiro; `extra` (testes, ou futuras Tasks)
   // pode sobrepor por chave — é o que os testes de rota crua do servidor
   // (test/ui-server.test.js) fazem para exercitar o roteador isoladamente.
-  const routes = { ...messageRoutes, ...scheduleRoutes, ...listRoutes, ...actionRoutes, ...extra };
+  const routes = { ...messageRoutes, ...scheduleRoutes, ...listRoutes, ...settingsRoutes, ...actionRoutes, ...extra };
 
   const server = createHttpServer(async (req, res) => {
     let url;

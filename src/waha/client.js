@@ -137,3 +137,31 @@ export async function sendMedia(chatId, file, { kind, caption } = {}, cfg = conf
 
   return res.json().catch(() => ({}));
 }
+
+/**
+ * Estado da sessão do WhatsApp e a identidade do número conectado.
+ * @param {object} [cfg] Configuração a usar (default: config global).
+ * @returns {Promise<{status: string, me: {id: string, pushName: string}|null}>}
+ *   status como o WAHA devolve ("WORKING", "STOPPED", "SCAN_QR_CODE", "FAILED"...).
+ */
+export async function getSession(cfg = config) {
+  const url = `${cfg.wahaUrl}/api/sessions/${encodeURIComponent(cfg.session)}`;
+
+  let res;
+  try {
+    res = await fetch(url, { headers: headers(cfg) });
+  } catch (err) {
+    throw new Error(`Falha de conexão ao consultar a sessão em ${url}: ${err.message}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(`Erro ${res.status} ao consultar a sessão em ${url}: ${await readBody(res)}`);
+  }
+
+  const data = await res.json().catch(() => null);
+  if (!data || typeof data.status !== 'string') {
+    throw new Error(`Resposta inesperada ao consultar a sessão em ${url}: esperava "status".`);
+  }
+  const me = data.me && typeof data.me.id === 'string' ? { id: data.me.id, pushName: String(data.me.pushName ?? '') } : null;
+  return { status: data.status, me };
+}

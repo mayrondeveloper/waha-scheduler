@@ -15,6 +15,9 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// O vigia da sessão consulta o WAHA no boot: nos testes, nunca o real.
+const offlineClient = { async getSession() { throw new Error('offline no teste'); } };
+
 function writeConfig(path, cronDoSegundo) {
   writeFileSync(path, JSON.stringify({
     version: 2,
@@ -37,7 +40,7 @@ test('reload aplica agendamento novo sem reiniciar', (t) => {
   const path = newPath();
   writeConfig(path, null);
 
-  const scheduler = startScheduler({ schedulesPath: path });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path });
   t.after(() => scheduler.stop());
 
   assert.deepEqual(scheduler.activeNames, ['primeiro']);
@@ -52,7 +55,7 @@ test('reload com config inválida preserva a anterior e não derruba', (t) => {
   const path = newPath();
   writeConfig(path, null);
 
-  const scheduler = startScheduler({ schedulesPath: path });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path });
   t.after(() => scheduler.stop());
 
   writeFileSync(path, '{ isso não é json }');
@@ -74,7 +77,7 @@ test('agendamento desabilitado não entra nos ativos', (t) => {
     ],
   }));
 
-  const scheduler = startScheduler({ schedulesPath: path });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path });
   t.after(() => scheduler.stop());
 
   assert.deepEqual(scheduler.activeNames, ['ligado']);
@@ -92,7 +95,7 @@ test('reload destrói (não apenas para) a task de um agendamento removido', (t)
   const path = newPath();
   writeConfig(path, null); // só "primeiro"
 
-  const scheduler = startScheduler({ schedulesPath: path });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path });
   t.after(() => scheduler.stop());
 
   const before = [...getTasks().values()];
@@ -124,7 +127,7 @@ test('scheduler.stop() destrói (não apenas para) as tasks ativas', () => {
   const path = newPath();
   writeConfig(path, null); // só "primeiro"
 
-  const scheduler = startScheduler({ schedulesPath: path });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path });
 
   const before = [...getTasks().values()];
   assert.equal(before.length, 1);
@@ -154,7 +157,7 @@ test('startScheduler() lança com config inválida e nomeia o agendamento proble
   }));
 
   assert.throws(
-    () => startScheduler({ schedulesPath: path }),
+    () => startScheduler({ client: offlineClient, schedulesPath: path }),
     /quebrado/,
     'o erro de boot deveria nomear o agendamento problemático'
   );
@@ -266,7 +269,7 @@ test('falha ao registrar na recarga preserva a geração anterior intacta', (t) 
   writeConfig(path, null); // só "primeiro"
 
   const cfg = { timezone: 'UTC' };
-  const scheduler = startScheduler({ schedulesPath: path, cfg });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path, cfg });
   t.after(() => scheduler.stop());
 
   assert.equal(getTasks().size, 1);
@@ -292,7 +295,7 @@ test('falha no MEIO do laço destrói as tasks novas já criadas e preserva a ge
   writeConfig(path, null); // só "primeiro"
 
   const cfg = { timezone: 'UTC' };
-  const scheduler = startScheduler({ schedulesPath: path, cfg });
+  const scheduler = startScheduler({ client: offlineClient, schedulesPath: path, cfg });
   t.after(() => scheduler.stop());
 
   assert.equal(getTasks().size, 1);
