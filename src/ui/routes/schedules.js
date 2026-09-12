@@ -23,7 +23,7 @@ function contextOf(store) {
 function fieldsOf(body) {
   return {
     name: body.name, cron: body.cron, at: body.at, messageId: body.messageId,
-    groups: body.groups, groupLists: body.groupLists, enabled: body.enabled,
+    groups: body.groups, groupLists: body.groupLists, enabled: body.enabled, utm: body.utm,
   };
 }
 

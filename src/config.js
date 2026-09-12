@@ -12,6 +12,8 @@ const DEFAULTS = {
   DELAY_MAX_MS: '8000',
   TIMEZONE: 'America/Sao_Paulo',
   UI_PORT: '3010',
+  CLICKS_URL: '',
+  CLICKS_API_KEY: '',
 };
 
 /**
@@ -78,6 +80,9 @@ export function loadConfig(env = process.env) {
     delayMaxMs,
     timezone: readTimezone(env, 'TIMEZONE'),
     uiPort: readNumber(env, 'UI_PORT'),
+    // Cliques por disparo: as duas vazias desligam a função.
+    clicksUrl: (env.CLICKS_URL ?? DEFAULTS.CLICKS_URL).trim().replace(/\/+$/, ''),
+    clicksApiKey: (env.CLICKS_API_KEY ?? DEFAULTS.CLICKS_API_KEY).trim(),
   });
 }
 

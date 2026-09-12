@@ -139,6 +139,48 @@ export async function sendMedia(chatId, file, { kind, caption } = {}, cfg = conf
 }
 
 /**
+ * Envia texto com prévia de link customizada (título, descrição e imagem do
+ * destino), pelo endpoint link-custom-preview da engine WEBJS.
+ * @param {string} chatId Id do destino.
+ * @param {string} text Conteúdo da mensagem, com o link dentro.
+ * @param {{url: string, title: string, description?: string, image?: string|null}} preview
+ *   url: o link como aparece no texto; image: URL da imagem, opcional.
+ * @param {object} [cfg] Configuração a usar (default: config global).
+ * @returns {Promise<unknown>} Corpo da resposta do WAHA.
+ */
+export async function sendTextWithPreview(chatId, text, preview, cfg = config) {
+  const url = `${cfg.wahaUrl}/api/send/link-custom-preview`;
+  const payload = {
+    session: cfg.session,
+    chatId,
+    text,
+    preview: {
+      url: preview.url,
+      title: preview.title,
+      description: preview.description ?? '',
+      ...(preview.image && { image: { url: preview.image } }),
+    },
+  };
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: headers(cfg),
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    throw new Error(`Falha de conexão ao enviar com prévia para ${chatId}: ${err.message}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(`Erro ${res.status} ao enviar com prévia para ${chatId}: ${await readBody(res)}`);
+  }
+
+  return res.json().catch(() => ({}));
+}
+
+/**
  * Estado da sessão do WhatsApp e a identidade do número conectado.
  * @param {object} [cfg] Configuração a usar (default: config global).
  * @returns {Promise<{status: string, me: {id: string, pushName: string}|null}>}
