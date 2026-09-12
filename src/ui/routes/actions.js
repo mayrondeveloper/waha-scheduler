@@ -6,11 +6,15 @@ import { schedule as scheduleCron } from 'node-cron';
 import { readStore } from '../../store.js';
 import { checkCron, resolveTargets, dueAction } from '../../schedules.js';
 import { wallToInstant } from '../../dates.js';
-import { listGroups } from '../../waha/client.js';
+import * as wahaClient from '../../waha/client.js';
 import { broadcast } from '../../broadcast.js';
 import { statusPathFor, readStatus, schedulerState } from '../../scheduler-status.js';
 import { mediaDirFor, mediaPath } from '../../media.js';
+import { inQuietHours, quietEnd } from '../../quiet.js';
+import { sendAlert } from '../../alerts.js';
 import { error } from '../../logger.js';
+
+const { listGroups, getSession } = wahaClient;
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -95,13 +99,41 @@ export const actionRoutes = {
     const media = message.media
       ? { ...message.media, path: mediaPath(mediaDirFor(schedulesPath), message.media) }
       : null;
+    // O envio manual sai mesmo pausado ou na janela de silêncio (a tela avisa
+    // antes), mas conta e obedece ao limite por hora como qualquer outro.
     const { sent, failed, results } = await broadcast(message.text, resolveTargets(schedule, store.groupLists), {
       cfg,
       label: `${schedule.name} (manual)`,
       media,
+      hourlyLimit: store.settings.hourlyLimit,
     });
 
     return { body: { sent, failed, results } };
+  },
+
+  'GET /api/session': async ({ cfg }) => {
+    try {
+      return { body: await getSession(cfg) };
+    } catch (err) {
+      throw httpError(502, err.message);
+    }
+  },
+
+  // Manda um alerta de teste pelos canais configurados, para o usuário ver
+  // que a URL de push e o WhatsApp estão certos antes de precisar deles.
+  'POST /api/alerts/test': async ({ schedulesPath, cfg }) => {
+    const { settings } = readStore(schedulesPath);
+    let me = null;
+    try {
+      me = (await getSession(cfg)).me;
+    } catch (err) {
+      error(`Teste de alerta sem a identidade da sessão: ${err.message}`);
+    }
+    const sent = await sendAlert(
+      { title: 'Teste de alerta', text: 'Se você recebeu isto, os alertas do waha-scheduler estão funcionando.', channels: ['whatsapp', 'push'] },
+      { settings, cfg, client: wahaClient, me }
+    );
+    return { body: { sent } };
   },
 
   'GET /api/cron/preview': async ({ url, cfg }) => {
@@ -138,8 +170,12 @@ export const actionRoutes = {
       error(`${err.message}. A tela vai mostrar o agendador como parado.`);
     }
 
+    const store = readStore(schedulesPath);
+    const { settings } = store;
+    const quiet = inQuietHours(now, settings.quietHours, cfg.timezone);
+
     const nextRuns = {};
-    for (const schedule of readStore(schedulesPath).schedules) {
+    for (const schedule of store.schedules) {
       if (!schedule.enabled) continue;
       try {
         // Envio único: o próprio horário, enquanto não tiver disparado nem
@@ -165,6 +201,12 @@ export const actionRoutes = {
           reloadError: status?.reloadError ?? null,
         },
         nextRuns,
+        paused: settings.paused,
+        quietHours: settings.quietHours,
+        // Instante do fim da janela quando agora está dentro dela; senão nulo.
+        quietUntil: quiet ? new Date(quietEnd(now, settings.quietHours, cfg.timezone)).toISOString() : null,
+        // O que o agendador viu da sessão do WAHA na última consulta.
+        waha: status?.waha ?? null,
       },
     };
   },
