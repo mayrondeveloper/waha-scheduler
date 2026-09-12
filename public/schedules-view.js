@@ -3,7 +3,7 @@
 
 import { escape, icon, badge } from './html.js';
 import { WEEKDAYS, buildCron, parseCron, describeCron } from './cron.js';
-import { formatWhen } from './dates.js';
+import { formatWhen, describeAt } from './dates.js';
 import { formatWhatsApp } from './whatsapp.js';
 import { messageEditor, bubbleContent } from './messages-view.js';
 
@@ -43,18 +43,30 @@ export function schedulesSubtitle(schedules) {
 }
 
 function nextText(schedule, nextRuns, timeZone, now) {
+  // Envio único já resolvido: o que aconteceu, no lugar do próximo.
+  if (schedule.firedAt) return `Enviado em <strong>${escape(formatWhen(schedule.firedAt, { timeZone, now }))}</strong>`;
+  if (schedule.missedAt) return `Perdido · o agendador estava parado às ${escape(schedule.at.slice(11))}`;
   if (!schedule.enabled) return 'Próximo: —';
   if (!(schedule.id in nextRuns)) return '';
   const next = nextRuns[schedule.id];
   return next ? `Próximo: <strong>${escape(formatWhen(next, { timeZone, now }))}</strong>` : 'Nenhum envio previsto';
 }
 
-// Pausado é escolha do usuário e vence; depois vem o resultado do último
-// envio; senão, ativo.
+// Pausado é escolha do usuário e vence; depois vem o resultado do envio
+// único (enviado, perdido) ou do último envio; senão, ativo.
 function statusBadge(schedule, last) {
   if (!schedule.enabled) return badge('paused', 'Pausado');
+  if (schedule.missedAt) return badge('error', 'Perdido');
   if (last?.failed > 0) return badge('error', 'Falha no envio');
+  if (schedule.firedAt) return badge('waiting', 'Enviado');
   return badge('active', 'Ativo');
+}
+
+// "Quando" do card: os dias por extenso, o cron cru ou a data do envio único.
+function whenText(s, timeZone, now) {
+  if (s.at) return `Uma vez · ${escape(describeAt(s.at, { timeZone, now }))}`;
+  const when = describeCron(s.cron);
+  return when ? escape(when) : `<code>${escape(s.cron)}</code>`;
 }
 
 const MAX_GROUP_NAMES = 4;
@@ -73,12 +85,12 @@ function failureLine(last, timeZone, now) {
 }
 
 function scheduleCard(s, index, { messages, nextRuns, timeZone, now, groupName, lastDispatches }) {
-  const when = describeCron(s.cron);
   const message = messages.find((m) => m.id === s.messageId);
   const last = lastDispatches[s.name];
   const id = escape(s.id);
   const name = escape(s.name);
-  const classes = ['card', 'schedule-card', s.enabled ? '' : 'is-paused', s.enabled && last?.failed > 0 ? 'has-failure' : '']
+  const failing = s.enabled && (last?.failed > 0 || Boolean(s.missedAt));
+  const classes = ['card', 'schedule-card', s.enabled ? '' : 'is-paused', failing ? 'has-failure' : '']
     .filter(Boolean).join(' ');
   return `
     <li class="${classes}" style="--i: ${Math.min(index, 8)}">
@@ -89,7 +101,7 @@ function scheduleCard(s, index, { messages, nextRuns, timeZone, now, groupName, 
           <button type="button" class="card-title" data-action="edit" data-id="${id}">${name}</button>
           ${statusBadge(s, last)}
         </div>
-        <div class="card-sub">${when ? escape(when) : `<code>${escape(s.cron)}</code>`} · ${escape(message?.name ?? 'mensagem não encontrada')}</div>
+        <div class="card-sub">${whenText(s, timeZone, now)} · ${escape(message?.name ?? 'mensagem não encontrada')}</div>
         <div class="card-meta">${nextText(s, nextRuns, timeZone, now)}</div>
         <div class="card-sub">${groupsText(s.groups, groupName)}</div>
         ${failureLine(last, timeZone, now)}
@@ -142,19 +154,16 @@ function fieldGroup(id, label, aside, body) {
     </div>`;
 }
 
-// Um cron personalizado (editado à mão no arquivo) aparece cru e é mantido
-// como está: convertê-lo em dias e horário em silêncio mudaria quando o
-// agendamento dispara, num save que talvez só quisesse trocar a mensagem.
-function whenSection(schedule, timezoneLabel) {
+// Bloco de repetição: dias e horário, ou o cron cru. Um cron personalizado
+// (editado à mão no arquivo) aparece cru e é mantido como está: convertê-lo
+// em dias e horário em silêncio mudaria quando o agendamento dispara, num
+// save que talvez só quisesse trocar a mensagem.
+function repeatBlock(schedule) {
   const when = schedule.cron ? parseCron(schedule.cron) : { days: [], time: '' };
-  const zone = timezoneLabel ? `${escape(timezoneLabel)}. ` : '';
-  const preview = `<p class="hint">${zone}<span id="preview" class="preview">—</span></p>`;
-
   if (!when) {
-    return fieldGroup('label-when', 'Quando', '', `
+    return `
       <p class="note">Este agendamento usa um cron personalizado, que não cabe em dias e horário. Ele é mantido como está.</p>
-      <input type="text" name="cron" value="${escape(schedule.cron)}" required autocomplete="off" aria-label="Expressão cron" />
-      ${preview}`);
+      <input type="text" name="cron" value="${escape(schedule.cron)}" required autocomplete="off" aria-label="Expressão cron" />`;
   }
 
   const days = WEEKDAYS.map((d) => `
@@ -163,17 +172,52 @@ function whenSection(schedule, timezoneLabel) {
           <span>${escape(d.label)}</span>
         </label>`).join('');
 
-  return fieldGroup('label-when', 'Quando', '', `
+  return `
       <div class="days">${days}</div>
       <div class="when-row">
         <button type="button" class="link" data-action="days-weekdays">Dias úteis</button>
         <button type="button" class="link" data-action="days-all">Todo dia</button>
         <label class="time">
           <span class="visually-hidden">Horário</span>
-          <input type="time" name="time" value="${escape(when.time)}" required />
+          <input type="time" name="time" value="${escape(when.time)}" />
         </label>
-      </div>
-      ${preview}`);
+      </div>`;
+}
+
+// Bloco do envio único: data e horário, no fuso do agendador.
+function onceBlock(schedule) {
+  const [date = '', time = ''] = (schedule.at ?? '').split('T');
+  return `
+      <div class="when-row when-once">
+        <label class="date">
+          <span class="visually-hidden">Data</span>
+          <input type="date" name="date" value="${escape(date)}" />
+        </label>
+        <label class="time">
+          <span class="visually-hidden">Horário</span>
+          <input type="time" name="onceTime" value="${escape(time)}" />
+        </label>
+      </div>`;
+}
+
+// Modo do bloco "Quando": o que a tela guardou ao alternar, senão o que o
+// agendamento é.
+function whenMode(schedule) {
+  return schedule.mode ?? (schedule.at ? 'once' : 'repeat');
+}
+
+function whenSection(schedule, timezoneLabel) {
+  const mode = whenMode(schedule);
+  const zone = timezoneLabel ? `${escape(timezoneLabel)}. ` : '';
+  const segment = (value, label) =>
+    `<button type="button" data-action="when-${value}" aria-pressed="${mode === value}">${label}</button>`;
+
+  return fieldGroup('label-when', 'Quando', '', `
+      <div class="segmented when-mode" role="group" aria-label="Repetir ou enviar uma vez">${segment('repeat', 'Repetir')}${segment('once', 'Uma vez')}</div>
+      <input type="hidden" name="mode" value="${mode}" />
+      <div data-role="when-repeat" ${mode === 'repeat' ? '' : 'hidden'}>${repeatBlock(schedule)}</div>
+      <div data-role="when-once" ${mode === 'once' ? '' : 'hidden'}>${onceBlock(schedule)}</div>
+      <p class="hint">${zone}<span id="preview" class="preview">—</span></p>`);
 }
 
 function messageSection(schedule, messages, composing, media, mediaSrc) {
@@ -280,6 +324,21 @@ export function formCron(form) {
   const days = [...form.querySelectorAll('input[name="day"]:checked')].map((input) => Number(input.value));
   const time = form.querySelector('input[name="time"]')?.value ?? '';
   return days.length > 0 && time ? buildCron(days, time) : '';
+}
+
+/**
+ * O "quando" que o formulário representa agora: `{ cron }` no modo Repetir
+ * (vazio enquanto faltar dia ou horário) ou `{ at }` no modo Uma vez (vazio
+ * enquanto faltar data ou horário).
+ * @param {{querySelector: Function, querySelectorAll: Function}} form
+ * @returns {{cron: string} | {at: string}}
+ */
+export function formWhen(form) {
+  const mode = form.querySelector('input[name="mode"]')?.value ?? 'repeat';
+  if (mode !== 'once') return { cron: formCron(form) };
+  const date = form.querySelector('input[name="date"]')?.value ?? '';
+  const time = form.querySelector('input[name="onceTime"]')?.value ?? '';
+  return { at: date && time ? `${date}T${time}` : '' };
 }
 
 /**

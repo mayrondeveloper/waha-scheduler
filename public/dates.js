@@ -57,6 +57,24 @@ export function formatWhen(when, { timeZone, now = Date.now() } = {}) {
 }
 
 /**
+ * Uma hora de parede do agendador ("2026-09-13T10:00", já no fuso dele) por
+ * extenso: "sáb 13/09, 10:00", ou com o ano quando não é o ano corrente.
+ * Não converte fuso: a parede é o que o usuário escolheu.
+ * @param {string} wall
+ * @param {{timeZone?: string, now?: number}} [options] Só para saber o ano corrente.
+ * @returns {string} '' quando o valor não é uma parede completa.
+ */
+export function describeAt(wall, { timeZone, now = Date.now() } = {}) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(wall ?? '');
+  if (!m) return '';
+  const [year, month, day, hour, minute] = m.slice(1);
+  const weekday = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDay();
+  const time = `${hour}:${minute}`;
+  if (Number(year) !== partsIn(new Date(now), timeZone).year) return `${day}/${month}/${year}, ${time}`;
+  return `${WEEKDAY_SHORT[weekday]} ${day}/${month}, ${time}`;
+}
+
+/**
  * Só o horário, "HH:MM" ou "HH:MM:SS", no fuso pedido.
  * @param {string|number|Date} when
  * @param {{timeZone?: string, seconds?: boolean}} [options]

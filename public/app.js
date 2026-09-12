@@ -4,13 +4,13 @@
 
 import { api } from './api.js';
 import { escape, icon, pageHeader } from './html.js';
-import { formatWhen } from './dates.js';
+import { formatWhen, describeAt } from './dates.js';
 import { formatWhatsApp, toggleInline, toggleMonospace, toggleLinePrefix, insertText } from './whatsapp.js';
 import { recentEmojis, rememberEmoji } from './emoji.js';
 import { groupDispatches, lastDispatchByName } from './history.js';
 import { statusBar } from './status-view.js';
 import {
-  scheduleList, scheduleForm, formCron, formGroups, searchKey, selectedCountLabel, sendConfirm, sendResult,
+  scheduleList, scheduleForm, formCron, formWhen, formGroups, searchKey, selectedCountLabel, sendConfirm, sendResult,
   schedulesSubtitle,
 } from './schedules-view.js';
 import { messageList, messageForm, emojiPanel, messagesSubtitle, bubbleContent } from './messages-view.js';
@@ -288,8 +288,14 @@ function renderScheduleDrawer({ fresh = false } = {}) {
     media,
     mediaSrc: src,
   }), { fresh });
-  updatePreview(state.editing.data.cron ?? '');
+  const data = state.editing.data;
+  if (whenModeOf(data) === 'once') showOncePreview(data.at ?? '');
+  else updatePreview(data.cron ?? '');
 }
+
+// Modo do bloco "Quando" do agendamento em edição: o que a tela guardou ao
+// alternar, senão o que o agendamento é.
+const whenModeOf = (data) => data.mode ?? (data.at ? 'once' : 'repeat');
 
 /**
  * Abre o painel de agendamento: novo (sem id) ou edição.
@@ -298,7 +304,7 @@ function renderScheduleDrawer({ fresh = false } = {}) {
 export function openScheduleEditor(id) {
   const data = id
     ? structuredClone(state.schedules.find((s) => s.id === id))
-    : { name: '', cron: '', messageId: state.messages[0]?.id, groups: [], enabled: true };
+    : { name: '', cron: '', messageId: state.messages[0]?.id, groups: [], groupLists: [], enabled: true };
   state.editing = {
     type: 'schedule', data, composing: false, snapshot: '', media: { current: null, pending: null }, mediaDirty: false,
   };
@@ -344,10 +350,55 @@ function captureScheduleForm() {
   const form = drawer().querySelector('form');
   const data = state.editing.data;
   data.name = fieldValue(form, 'name');
-  data.cron = formCron(form);
+  applyWhen(data, formWhen(form));
   data.groups = formGroups(form);
   const messageId = fieldValue(form, 'messageId');
   if (messageId) data.messageId = messageId;
+}
+
+// Guarda o "quando" do formulário nos dados em edição: cron OU at, nunca os
+// dois, e o modo escolhido, para o painel redesenhar no mesmo modo.
+function applyWhen(data, when) {
+  if ('at' in when) {
+    data.mode = 'once';
+    data.at = when.at;
+    delete data.cron;
+  } else {
+    data.mode = 'repeat';
+    data.cron = when.cron;
+    delete data.at;
+  }
+}
+
+// Prévia do envio único: não depende do servidor, a data é a que o usuário
+// escolheu, já no fuso do agendador.
+function showOncePreview(at) {
+  const el = drawer().querySelector('#preview');
+  if (!el) return;
+  previewToken++; // uma resposta de prévia de cron ainda em voo não pode sobrescrever
+  el.className = 'preview';
+  el.textContent = at
+    ? `Uma vez: ${describeAt(at, { timeZone: timeZone(), now: now() })}`
+    : 'Informe a data e o horário do envio único.';
+}
+
+function refreshWhenPreview(form) {
+  const when = formWhen(form);
+  if ('at' in when) showOncePreview(when.at);
+  else updatePreview(when.cron);
+}
+
+// Alterna Repetir / Uma vez sem redesenhar o painel: só troca o bloco
+// visível, o campo oculto que o save lê e a prévia.
+function setWhenMode(form, mode) {
+  const field = form.querySelector('input[name="mode"]');
+  if (field) field.value = mode;
+  for (const block of form.querySelectorAll('[data-role^="when-"]')) block.hidden = block.dataset.role !== `when-${mode}`;
+  for (const button of form.querySelectorAll('[data-action^="when-"]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.action === `when-${mode}`));
+  }
+  if (state.editing) state.editing.data.mode = mode;
+  refreshWhenPreview(form);
 }
 
 // Token da última chamada em voo: a resposta de uma digitação antiga (rede
@@ -660,7 +711,13 @@ async function deleteMessage(id) {
 }
 
 async function persistSchedule(data) {
-  const payload = { name: data.name, cron: data.cron, messageId: data.messageId, groups: data.groups };
+  const payload = {
+    name: data.name,
+    ...(data.at ? { at: data.at } : { cron: data.cron }),
+    messageId: data.messageId,
+    groups: data.groups,
+    groupLists: data.groupLists ?? [],
+  };
   if (data.id) {
     await api(`/schedules/${encodeURIComponent(data.id)}`, {
       method: 'PUT',
@@ -672,17 +729,20 @@ async function persistSchedule(data) {
 }
 
 async function saveSchedule(form) {
-  // O horário e o cron cru já são obrigatórios no próprio campo; o que o
-  // navegador não barra é nenhum dia marcado.
-  const cron = formCron(form);
-  if (!cron) throw new Error('Selecione ao menos um dia da semana e o horário.');
+  // O formulário é novalidate: o que o navegador não barra (nenhum dia
+  // marcado, data sem horário) é barrado aqui, antes da ida ao servidor.
+  const when = formWhen(form);
+  if ('at' in when && !when.at) throw new Error('Informe a data e o horário do envio único.');
+  if ('cron' in when && !when.cron) throw new Error('Selecione ao menos um dia da semana e o horário.');
   const groups = formGroups(form);
+  const groupLists = state.editing.data.groupLists ?? [];
   // A API recusa lista vazia com 400. Barrar aqui evita a ida e volta e
   // deixa claro que desmarcar tudo não significa "herda os defaults".
-  if (groups.length === 0) throw new Error('Selecione ao menos um grupo de destino.');
+  if (groups.length === 0 && groupLists.length === 0) throw new Error('Selecione ao menos um grupo de destino.');
 
   const editing = state.editing;
-  editing.data = { ...editing.data, name: fieldValue(form, 'name'), cron, groups };
+  editing.data = { ...editing.data, name: fieldValue(form, 'name'), groups, groupLists };
+  applyWhen(editing.data, when);
 
   if (form.querySelector('[name="messageText"]')) {
     // "Escrever nova": grava a mensagem primeiro. Se o agendamento for
@@ -806,6 +866,8 @@ export function handleClick(evt) {
     },
     'days-weekdays': () => setDays(el.form, [1, 2, 3, 4, 5]),
     'days-all': () => setDays(el.form, [0, 1, 2, 3, 4, 5, 6]),
+    'when-repeat': () => setWhenMode(el.form, 'repeat'),
+    'when-once': () => setWhenMode(el.form, 'once'),
     toggle: () => guarded(() => toggleSchedule(id)),
     run: () => openSendModal(id),
     'confirm-send': () => confirmSend(el, id),
@@ -839,6 +901,8 @@ export function handleInput(evt) {
   const target = evt.target;
   if (['day', 'time', 'cron'].includes(target.name)) {
     updatePreview(formCron(target.form));
+  } else if (['date', 'onceTime'].includes(target.name)) {
+    showOncePreview(formWhen(target.form).at);
   } else if (target.dataset?.editor !== undefined) {
     updateEditorPreview(target);
   } else if (target.dataset?.role === 'group-search') {
