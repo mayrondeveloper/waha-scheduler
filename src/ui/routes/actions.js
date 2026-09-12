@@ -3,8 +3,9 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { schedule as scheduleCron } from 'node-cron';
-import { readStore } from '../store.js';
-import { checkCron } from '../../schedules.js';
+import { readStore } from '../../store.js';
+import { checkCron, resolveTargets, dueAction } from '../../schedules.js';
+import { wallToInstant } from '../../dates.js';
 import { listGroups } from '../../waha/client.js';
 import { broadcast } from '../../broadcast.js';
 import { statusPathFor, readStatus, schedulerState } from '../../scheduler-status.js';
@@ -94,7 +95,7 @@ export const actionRoutes = {
     const media = message.media
       ? { ...message.media, path: mediaPath(mediaDirFor(schedulesPath), message.media) }
       : null;
-    const { sent, failed, results } = await broadcast(message.text, schedule.groups, {
+    const { sent, failed, results } = await broadcast(message.text, resolveTargets(schedule, store.groupLists), {
       cfg,
       label: `${schedule.name} (manual)`,
       media,
@@ -141,7 +142,11 @@ export const actionRoutes = {
     for (const schedule of readStore(schedulesPath).schedules) {
       if (!schedule.enabled) continue;
       try {
-        nextRuns[schedule.id] = nextRunOf(schedule.cron, cfg.timezone);
+        // Envio único: o próprio horário, enquanto não tiver disparado nem
+        // sido perdido.
+        nextRuns[schedule.id] = schedule.at
+          ? (dueAction(schedule, now, cfg.timezone) === 'done' ? null : new Date(wallToInstant(schedule.at, cfg.timezone)).toISOString())
+          : nextRunOf(schedule.cron, cfg.timezone);
       } catch (err) {
         error(`Não foi possível calcular o próximo envio de "${schedule.name}": ${err.message}`);
         nextRuns[schedule.id] = null;

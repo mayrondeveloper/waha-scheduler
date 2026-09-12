@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readStore, updateStore } from '../src/ui/store.js';
+import { readStore, updateStore } from '../src/store.js';
 
 function newStorePath() {
   const dir = mkdtempSync(join(tmpdir(), 'waha-store-'));

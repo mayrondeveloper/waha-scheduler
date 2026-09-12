@@ -56,7 +56,7 @@ test('campos obrigatórios ausentes são recusados', () => {
   assert.throws(() => loadSchedules(semMensagem), /"messageId" é obrigatório/);
 
   const semCron = writeSchedules({ schedules: [{ name: 'sem-cron', message: 'x' }] });
-  assert.throws(() => loadSchedules(semCron), /"cron" é obrigatório/);
+  assert.throws(() => loadSchedules(semCron), /informe "cron" \(repetição\) ou "at" \(envio único\)/);
 });
 
 test('agendamento sem nenhum grupo de destino é recusado', () => {

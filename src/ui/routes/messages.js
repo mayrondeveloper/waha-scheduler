@@ -1,9 +1,9 @@
 // Rotas HTTP da biblioteca de mensagens, com o anexo de cada uma.
 
 import { readFileSync } from 'node:fs';
-import { readStore, updateStore } from '../store.js';
+import { readStore, updateStore } from '../../store.js';
 import { validateMessage } from '../../schedules.js';
-import { MAX_MEDIA_BYTES, mediaDirFor, mediaPath, saveMedia, removeMedia } from '../../media.js';
+import { MAX_MEDIA_BYTES, mediaDirFor, mediaPath, saveMedia, removeMedia, copyMedia } from '../../media.js';
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -40,20 +40,30 @@ function assertUniqueName(messages, name, excludeId) {
 }
 
 // O "media" do corpo é um upload novo ({ filename, mimetype, data }), a
-// referência ao atual ({ id }) ou nada (sem anexo). Devolve o que gravar na
-// mensagem, o arquivo recém-gravado (para desfazer se a gravação falhar) e
-// o obsoleto (para apagar depois que a gravação der certo).
-function resolveMedia(body, current, dir, cfg) {
+// referência ao atual ({ id }), a referência ao anexo de outra mensagem
+// ({ id } numa mensagem nova: duplicar) ou nada (sem anexo). Devolve o que
+// gravar na mensagem, o arquivo recém-gravado (para desfazer se a gravação
+// falhar) e o obsoleto (para apagar depois que a gravação der certo).
+function resolveMedia(body, current, dir, cfg, { copyFrom = null } = {}) {
   const incoming = body.media;
   if (incoming == null) return { media: null, saved: null, obsolete: current };
   if (typeof incoming !== 'object' || Array.isArray(incoming)) {
     throw httpError(400, 'Campo "media" deve ser um objeto.');
   }
   if (incoming.data === undefined) {
-    if (!current || incoming.id !== current.id) {
-      throw httpError(400, `Anexo "${incoming.id}" não é o anexo atual desta mensagem.`);
+    if (current && incoming.id === current.id) return { media: current, saved: null, obsolete: null };
+    if (copyFrom && incoming.id === copyFrom.id) {
+      // Cada mensagem é dona do próprio arquivo: excluir a original não pode
+      // deixar a cópia sem anexo.
+      let saved;
+      try {
+        saved = copyMedia(dir, copyFrom);
+      } catch (err) {
+        throw httpError(400, err.message);
+      }
+      return { media: saved, saved, obsolete: null };
     }
-    return { media: current, saved: null, obsolete: null };
+    throw httpError(400, `Anexo "${incoming.id}" não é o anexo atual desta mensagem.`);
   }
   let saved;
   try {
@@ -76,7 +86,11 @@ export const messageRoutes = {
 
   'POST /api/messages': async ({ body, schedulesPath, cfg }) => {
     const dir = mediaDirFor(schedulesPath);
-    const { media, saved } = resolveMedia(body, null, dir, cfg);
+    // { id } numa mensagem nova só pode ser o anexo de uma mensagem existente
+    // (duplicar): o arquivo é copiado para a nova.
+    const sourceId = body.media?.data === undefined ? body.media?.id : undefined;
+    const copyFrom = sourceId ? readStore(schedulesPath).messages.find((m) => m.media?.id === sourceId)?.media ?? null : null;
+    const { media, saved } = resolveMedia(body, null, dir, cfg, { copyFrom });
     let created;
     let store;
     try {

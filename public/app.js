@@ -4,27 +4,29 @@
 
 import { api } from './api.js';
 import { escape, icon, pageHeader } from './html.js';
-import { formatWhen } from './dates.js';
+import { formatWhen, describeAt } from './dates.js';
 import { formatWhatsApp, toggleInline, toggleMonospace, toggleLinePrefix, insertText } from './whatsapp.js';
 import { recentEmojis, rememberEmoji } from './emoji.js';
 import { groupDispatches, lastDispatchByName } from './history.js';
 import { statusBar } from './status-view.js';
 import {
-  scheduleList, scheduleForm, formCron, formGroups, searchKey, selectedCountLabel, sendConfirm, sendResult,
-  schedulesSubtitle,
+  scheduleList, scheduleForm, formCron, formWhen, formGroups, formGroupLists, unionTargets, searchKey,
+  selectedCountLabel, sendConfirm, sendResult, schedulesSubtitle,
 } from './schedules-view.js';
 import { messageList, messageForm, emojiPanel, messagesSubtitle, bubbleContent } from './messages-view.js';
+import { listsView, listForm, listsSubtitle } from './lists-view.js';
 import { historyView, historySubtitle } from './history-view.js';
 import { classifyMedia, validateFile, mediaStrip } from './media.js';
 
 const STATUS_POLL_MS = 15_000;
 const LOG_LIMIT = 500;
-const TABS = ['schedules', 'messages', 'history'];
+const TABS = ['schedules', 'messages', 'lists', 'history'];
 
 /** Estado da tela. Exportado para os testes. */
 export const state = {
   schedules: [],
   messages: [],
+  groupLists: [],
   groups: [],
   groupsLoaded: false,
   groupsError: null,
@@ -64,6 +66,7 @@ export async function load() {
     api(`/logs?limit=${LOG_LIMIT}`),
   ]);
   Object.assign(state, { schedules, messages, logs });
+  await loadLists();
   await refreshStatus({ quiet: true });
   render();
   await loadGroups();
@@ -72,8 +75,18 @@ export async function load() {
 async function reloadData() {
   const [schedules, messages] = await Promise.all([api('/schedules'), api('/messages')]);
   Object.assign(state, { schedules, messages });
+  await loadLists();
   await refreshStatus({ quiet: true });
   render();
+}
+
+// As listas são apoio: sem elas a tela continua utilizável, com aviso.
+async function loadLists() {
+  try {
+    state.groupLists = await api('/lists');
+  } catch (err) {
+    toast(`Não foi possível carregar as listas de grupos: ${err.message}`, 'error');
+  }
 }
 
 async function loadGroups() {
@@ -91,7 +104,9 @@ async function loadGroups() {
   renderTab();
   // O painel pode ter aberto antes da lista chegar, com o campo de ids
   // digitados. Se ninguém mexeu nele ainda, troca pela lista de grupos.
-  if (state.editing?.type === 'schedule' && drawer().open && !isDirty()) renderScheduleDrawer({ fresh: true });
+  if (!drawer().open || isDirty()) return;
+  if (state.editing?.type === 'schedule') renderScheduleDrawer({ fresh: true });
+  else if (state.editing?.type === 'list') openListEditor(state.editing.data.id);
 }
 
 /**
@@ -113,8 +128,11 @@ export async function refreshStatus({ quiet = false } = {}) {
 
   renderStatus();
   if (JSON.stringify(state.status?.nextRuns ?? null) !== before) {
+    // Um disparo aconteceu: o histórico ganhou linhas e um envio único pode
+    // ter virado "Enviado" ou "Perdido" no arquivo.
     try {
-      state.logs = await api(`/logs?limit=${LOG_LIMIT}`);
+      const [logs, schedules] = await Promise.all([api(`/logs?limit=${LOG_LIMIT}`), api('/schedules')]);
+      Object.assign(state, { logs, schedules });
     } catch (err) {
       toast(`Não foi possível atualizar o histórico: ${err.message}`, 'error');
     }
@@ -151,12 +169,13 @@ function renderTabs() {
   for (const id of TABS) $(`#${id}`).hidden = id !== state.tab;
 }
 
-const TAB_TITLES = { schedules: 'Agendamentos', messages: 'Mensagens', history: 'Histórico' };
+const TAB_TITLES = { schedules: 'Agendamentos', messages: 'Mensagens', lists: 'Grupos', history: 'Histórico' };
 
 function primaryAction() {
   const action = {
     schedules: ['new-schedule', 'Novo agendamento'],
     messages: ['new-message', 'Nova mensagem'],
+    lists: ['new-list', 'Nova lista'],
   }[state.tab];
   return action
     ? `<button type="button" class="btn btn-primary" data-action="${action[0]}">${icon('plus')} ${action[1]}</button>`
@@ -166,6 +185,7 @@ function primaryAction() {
 function pageSubtitle() {
   if (state.tab === 'schedules') return schedulesSubtitle(state.schedules);
   if (state.tab === 'messages') return messagesSubtitle(state.messages);
+  if (state.tab === 'lists') return listsSubtitle(state.groupLists);
   return historySubtitle(groupDispatches(state.logs));
 }
 
@@ -189,9 +209,12 @@ function renderTab() {
       now: now(),
       groupName,
       lastDispatches: lastDispatchByName(groupDispatches(state.logs)),
+      groupLists: state.groupLists,
     });
   } else if (state.tab === 'messages') {
     $('#messages').innerHTML = messageList({ messages: state.messages, schedules: state.schedules });
+  } else if (state.tab === 'lists') {
+    $('#lists').innerHTML = listsView({ groupLists: state.groupLists, schedules: state.schedules, groupName });
   } else {
     $('#history').innerHTML = historyView({
       dispatches: groupDispatches(state.logs),
@@ -209,9 +232,13 @@ function toast(message, tone = 'ok') {
   el.innerHTML = `<span>${escape(message)}</span>${tone === 'error'
     ? `<button type="button" class="icon-btn" data-action="dismiss-toast" aria-label="Fechar aviso">${icon('x')}</button>`
     : ''}`;
-  // O aviso de sucesso some sozinho, pela animação do CSS; o de erro fica
-  // até ser fechado.
-  el.addEventListener('animationend', () => el.remove());
+  // O aviso de sucesso some sozinho, pela animação de saída do CSS; o de
+  // erro fica até ser fechado. Só a animação de SAÍDA remove: a de entrada
+  // também dispara animationend, e removia o aviso de erro assim que ele
+  // acabava de aparecer.
+  el.addEventListener('animationend', (evt) => {
+    if (evt.animationName === 'toast-out') el.remove();
+  });
   $('#toasts').append(el);
 }
 
@@ -287,9 +314,62 @@ function renderScheduleDrawer({ fresh = false } = {}) {
     timezoneLabel: state.status?.timezoneLabel,
     media,
     mediaSrc: src,
+    groupLists: state.groupLists,
   }), { fresh });
-  updatePreview(state.editing.data.cron ?? '');
+  const data = state.editing.data;
+  if (whenModeOf(data) === 'once') showOncePreview(data.at ?? '');
+  else updatePreview(data.cron ?? '');
 }
+
+/**
+ * Nome para uma cópia: "Promo (cópia)", ou "(cópia 2)", "(cópia 3)"... quando
+ * já existe.
+ * @param {string} name Nome do original.
+ * @param {string[]} existing Nomes já usados.
+ * @returns {string}
+ */
+export function copyName(name, existing) {
+  const taken = new Set(existing);
+  let candidate = `${name} (cópia)`;
+  for (let n = 2; taken.has(candidate); n++) candidate = `${name} (cópia ${n})`;
+  return candidate;
+}
+
+// Duplicar abre o editor com os dados do original e sem id: salvar cria um
+// item novo. O resultado de um envio único não vem junto.
+function duplicateSchedule(id) {
+  const { id: _id, firedAt: _f, missedAt: _m, ...source } = state.schedules.find((s) => s.id === id);
+  const data = structuredClone({ ...source, name: copyName(source.name, state.schedules.map((s) => s.name)) });
+  state.editing = {
+    type: 'schedule', data, composing: false, snapshot: '', media: { current: null, pending: null }, mediaDirty: false,
+  };
+  renderScheduleDrawer({ fresh: true });
+}
+
+// O anexo da cópia é o mesmo arquivo referenciado por id: o servidor copia
+// o arquivo ao criar a mensagem nova.
+function duplicateMessage(id) {
+  const source = state.messages.find((m) => m.id === id);
+  const data = { name: copyName(source.name, state.messages.map((m) => m.name)), text: source.text, media: source.media ?? null };
+  state.editing = {
+    type: 'message', data, composing: false, snapshot: '', media: { current: source.media ?? null, pending: null }, mediaDirty: false,
+  };
+  showDrawer(messageForm({ message: data }), { fresh: true });
+}
+
+/**
+ * Abre o painel de lista de grupos: nova (sem id) ou edição.
+ * @param {string} [id]
+ */
+export function openListEditor(id) {
+  const data = id ? structuredClone(state.groupLists.find((l) => l.id === id)) : { name: '', groups: [] };
+  state.editing = { type: 'list', data, composing: false, snapshot: '' };
+  showDrawer(listForm({ list: data, groups: state.groups, groupsError: state.groupsError }), { fresh: true });
+}
+
+// Modo do bloco "Quando" do agendamento em edição: o que a tela guardou ao
+// alternar, senão o que o agendamento é.
+const whenModeOf = (data) => data.mode ?? (data.at ? 'once' : 'repeat');
 
 /**
  * Abre o painel de agendamento: novo (sem id) ou edição.
@@ -298,7 +378,7 @@ function renderScheduleDrawer({ fresh = false } = {}) {
 export function openScheduleEditor(id) {
   const data = id
     ? structuredClone(state.schedules.find((s) => s.id === id))
-    : { name: '', cron: '', messageId: state.messages[0]?.id, groups: [], enabled: true };
+    : { name: '', cron: '', messageId: state.messages[0]?.id, groups: [], groupLists: [], enabled: true };
   state.editing = {
     type: 'schedule', data, composing: false, snapshot: '', media: { current: null, pending: null }, mediaDirty: false,
   };
@@ -344,10 +424,56 @@ function captureScheduleForm() {
   const form = drawer().querySelector('form');
   const data = state.editing.data;
   data.name = fieldValue(form, 'name');
-  data.cron = formCron(form);
+  applyWhen(data, formWhen(form));
   data.groups = formGroups(form);
+  data.groupLists = formGroupLists(form);
   const messageId = fieldValue(form, 'messageId');
   if (messageId) data.messageId = messageId;
+}
+
+// Guarda o "quando" do formulário nos dados em edição: cron OU at, nunca os
+// dois, e o modo escolhido, para o painel redesenhar no mesmo modo.
+function applyWhen(data, when) {
+  if ('at' in when) {
+    data.mode = 'once';
+    data.at = when.at;
+    delete data.cron;
+  } else {
+    data.mode = 'repeat';
+    data.cron = when.cron;
+    delete data.at;
+  }
+}
+
+// Prévia do envio único: não depende do servidor, a data é a que o usuário
+// escolheu, já no fuso do agendador.
+function showOncePreview(at) {
+  const el = drawer().querySelector('#preview');
+  if (!el) return;
+  previewToken++; // uma resposta de prévia de cron ainda em voo não pode sobrescrever
+  el.className = 'preview';
+  el.textContent = at
+    ? `Uma vez: ${describeAt(at, { timeZone: timeZone(), now: now() })}`
+    : 'Informe a data e o horário do envio único.';
+}
+
+function refreshWhenPreview(form) {
+  const when = formWhen(form);
+  if ('at' in when) showOncePreview(when.at);
+  else updatePreview(when.cron);
+}
+
+// Alterna Repetir / Uma vez sem redesenhar o painel: só troca o bloco
+// visível, o campo oculto que o save lê e a prévia.
+function setWhenMode(form, mode) {
+  const field = form.querySelector('input[name="mode"]');
+  if (field) field.value = mode;
+  for (const block of form.querySelectorAll('[data-role^="when-"]')) block.hidden = block.dataset.role !== `when-${mode}`;
+  for (const button of form.querySelectorAll('[data-action^="when-"]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.action === `when-${mode}`));
+  }
+  if (state.editing) state.editing.data.mode = mode;
+  refreshWhenPreview(form);
 }
 
 // Token da última chamada em voo: a resposta de uma digitação antiga (rede
@@ -406,9 +532,20 @@ function filterGroups(input) {
   });
 }
 
+// Contador da união (grupos avulsos e os das listas marcadas) e a marca
+// "já na lista" nos grupos que uma lista marcada cobre.
 function updateGroupCount(form) {
+  const union = unionTargets({ groups: formGroups(form), groupLists: formGroupLists(form) }, state.groupLists);
   const counter = form.querySelector('#groups-count');
-  if (counter) counter.textContent = selectedCountLabel(form.querySelectorAll('input[name="group"]:checked').length);
+  if (counter) counter.textContent = selectedCountLabel(union.length);
+
+  const covered = new Set(unionTargets({ groups: [], groupLists: formGroupLists(form) }, state.groupLists));
+  for (const label of form.querySelectorAll('.group[data-group]')) {
+    const isCovered = covered.has(label.dataset.group);
+    label.classList.toggle('is-covered', isCovered);
+    const mark = label.querySelector('.covered');
+    if (mark) mark.hidden = !isCovered;
+  }
 }
 
 function updateMessagePreview(select) {
@@ -568,7 +705,7 @@ function openSendModal(id) {
   const schedule = state.schedules.find((s) => s.id === id);
   const message = state.messages.find((m) => m.id === schedule.messageId);
   const m = modal();
-  m.innerHTML = sendConfirm({ schedule, message, groupName });
+  m.innerHTML = sendConfirm({ schedule, message, groupName, groupLists: state.groupLists });
   m.returnValue = '';
   m.showModal();
 }
@@ -660,7 +797,13 @@ async function deleteMessage(id) {
 }
 
 async function persistSchedule(data) {
-  const payload = { name: data.name, cron: data.cron, messageId: data.messageId, groups: data.groups };
+  const payload = {
+    name: data.name,
+    ...(data.at ? { at: data.at } : { cron: data.cron }),
+    messageId: data.messageId,
+    groups: data.groups,
+    groupLists: data.groupLists ?? [],
+  };
   if (data.id) {
     await api(`/schedules/${encodeURIComponent(data.id)}`, {
       method: 'PUT',
@@ -672,17 +815,20 @@ async function persistSchedule(data) {
 }
 
 async function saveSchedule(form) {
-  // O horário e o cron cru já são obrigatórios no próprio campo; o que o
-  // navegador não barra é nenhum dia marcado.
-  const cron = formCron(form);
-  if (!cron) throw new Error('Selecione ao menos um dia da semana e o horário.');
+  // O formulário é novalidate: o que o navegador não barra (nenhum dia
+  // marcado, data sem horário) é barrado aqui, antes da ida ao servidor.
+  const when = formWhen(form);
+  if ('at' in when && !when.at) throw new Error('Informe a data e o horário do envio único.');
+  if ('cron' in when && !when.cron) throw new Error('Selecione ao menos um dia da semana e o horário.');
   const groups = formGroups(form);
+  const groupLists = formGroupLists(form);
   // A API recusa lista vazia com 400. Barrar aqui evita a ida e volta e
   // deixa claro que desmarcar tudo não significa "herda os defaults".
-  if (groups.length === 0) throw new Error('Selecione ao menos um grupo de destino.');
+  if (groups.length === 0 && groupLists.length === 0) throw new Error('Selecione ao menos um grupo de destino.');
 
   const editing = state.editing;
-  editing.data = { ...editing.data, name: fieldValue(form, 'name'), cron, groups };
+  editing.data = { ...editing.data, name: fieldValue(form, 'name'), groups, groupLists };
+  applyWhen(editing.data, when);
 
   if (form.querySelector('[name="messageText"]')) {
     // "Escrever nova": grava a mensagem primeiro. Se o agendamento for
@@ -718,6 +864,34 @@ async function saveSchedule(form) {
   const name = editing.data.name.trim();
   closeDrawer();
   toast(`Agendamento "${name}" salvo`);
+  await reloadData();
+}
+
+async function saveList(form) {
+  const groups = formGroups(form);
+  if (groups.length === 0) throw new Error('Selecione ao menos um grupo para a lista.');
+  const payload = { name: fieldValue(form, 'name'), groups };
+  const id = state.editing.data.id;
+  await api(id ? `/lists/${encodeURIComponent(id)}` : '/lists', {
+    method: id ? 'PUT' : 'POST',
+    body: JSON.stringify(payload),
+  });
+  closeDrawer();
+  toast(`Lista "${payload.name.trim()}" salva`);
+  await reloadData();
+}
+
+async function deleteList(id) {
+  const list = state.groupLists.find((l) => l.id === id);
+  const ok = await confirmDialog({
+    title: `Excluir "${list.name}"?`,
+    body: 'A lista some do cadastro. Se algum agendamento usa ela, a exclusão é recusada.',
+    confirm: 'Excluir',
+    danger: true,
+  });
+  if (!ok) return;
+  await api(`/lists/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  toast(`Lista "${list.name}" excluída`);
   await reloadData();
 }
 
@@ -792,6 +966,11 @@ export function handleClick(evt) {
     edit: () => openScheduleEditor(id),
     'new-message': () => openMessageEditor(),
     'edit-message': () => openMessageEditor(id),
+    'new-list': () => openListEditor(),
+    'edit-list': () => openListEditor(id),
+    'delete-list': () => guarded(() => deleteList(id)),
+    duplicate: () => duplicateSchedule(id),
+    'duplicate-message': () => duplicateMessage(id),
     'close-drawer': () => requestCloseDrawer(),
     'close-modal': () => modal().close(),
     'compose-message': () => {
@@ -806,6 +985,8 @@ export function handleClick(evt) {
     },
     'days-weekdays': () => setDays(el.form, [1, 2, 3, 4, 5]),
     'days-all': () => setDays(el.form, [0, 1, 2, 3, 4, 5, 6]),
+    'when-repeat': () => setWhenMode(el.form, 'repeat'),
+    'when-once': () => setWhenMode(el.form, 'once'),
     toggle: () => guarded(() => toggleSchedule(id)),
     run: () => openSendModal(id),
     'confirm-send': () => confirmSend(el, id),
@@ -839,6 +1020,8 @@ export function handleInput(evt) {
   const target = evt.target;
   if (['day', 'time', 'cron'].includes(target.name)) {
     updatePreview(formCron(target.form));
+  } else if (['date', 'onceTime'].includes(target.name)) {
+    showOncePreview(formWhen(target.form).at);
   } else if (target.dataset?.editor !== undefined) {
     updateEditorPreview(target);
   } else if (target.dataset?.role === 'group-search') {
@@ -848,7 +1031,7 @@ export function handleInput(evt) {
 
 function handleChange(evt) {
   const target = evt.target;
-  if (target.name === 'group') {
+  if (target.name === 'group' || target.name === 'groupList') {
     updateGroupCount(target.form);
   } else if (target.name === 'messageId') {
     updateMessagePreview(target);
@@ -914,6 +1097,7 @@ export async function handleSubmit(evt) {
   try {
     if (form.id === 'form-schedule') await saveSchedule(form);
     else if (form.id === 'form-message') await saveMessage(form);
+    else if (form.id === 'form-list') await saveList(form);
   } catch (err) {
     showFormError(drawer(), err.message);
   } finally {

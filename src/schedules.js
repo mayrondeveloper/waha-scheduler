@@ -6,12 +6,38 @@ import { schedule as scheduleCron, validate as isValidCron } from 'node-cron';
 import { assertTimezone, config } from './config.js';
 import { normalizeGroups } from './broadcast.js';
 import { MEDIA_KINDS } from './media.js';
+import { isWall, wallToInstant } from './dates.js';
+
+/** Atraso máximo tolerado num envio único: além disso, ele é dado como perdido. */
+export const GRACE_MS = 600_000;
 
 function fail(message) {
   throw new Error(message);
 }
 
-function newId(prefix) {
+/**
+ * O que fazer com um envio único agora: esperar, disparar, dar como perdido
+ * (venceu há mais que a tolerância, com o agendador parado) ou nada, porque
+ * já disparou ou já foi perdido.
+ * @param {{at?: string, enabled: boolean, firedAt?: string, missedAt?: string}} schedule
+ * @param {number} nowMs Instante de referência.
+ * @param {string} timeZone Fuso do "at".
+ * @returns {'wait'|'fire'|'missed'|'done'}
+ */
+export function dueAction(schedule, nowMs, timeZone) {
+  if (!schedule.at || !schedule.enabled) return 'wait';
+  if (schedule.firedAt || schedule.missedAt) return 'done';
+  const due = wallToInstant(schedule.at, timeZone);
+  if (due > nowMs) return 'wait';
+  return nowMs - due <= GRACE_MS ? 'fire' : 'missed';
+}
+
+/**
+ * Id aleatório curto com prefixo: "sch-1a2b3c4d".
+ * @param {string} prefix
+ * @returns {string}
+ */
+export function newId(prefix) {
   return `${prefix}-${randomUUID().slice(0, 8)}`;
 }
 
@@ -106,15 +132,64 @@ export function validateMessage(raw, index) {
 }
 
 /**
+ * Valida e normaliza uma lista de grupos do cadastro "groupLists".
+ * @param {Record<string, unknown>} raw Lista crua.
+ * @param {number} [index] Posição no array (rotula erros sem nome como #1, #2, ...).
+ * @returns {{id: string, name: string, groups: string[]}}
+ */
+export function validateGroupList(raw, index) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    fail('Lista de grupos: cada item de "groupLists" deve ser um objeto.');
+  }
+  const label = labelFor(raw, index);
+  if (typeof raw.name !== 'string' || !raw.name.trim()) {
+    fail(`Lista de grupos ${label}: campo "name" é obrigatório e deve ser um texto.`);
+  }
+  if (raw.id !== undefined && (typeof raw.id !== 'string' || !raw.id.trim())) {
+    fail(`Lista de grupos "${label}": campo "id" deve ser um texto.`);
+  }
+  if (!Array.isArray(raw.groups)) {
+    fail(`Lista de grupos "${label}": campo "groups" deve ser uma lista de ids.`);
+  }
+  const groups = normalizeGroups(raw.groups);
+  if (groups.length === 0) {
+    fail(`Lista de grupos "${label}": selecione ao menos um grupo.`);
+  }
+  return { id: raw.id?.trim() || newId('lst'), name: raw.name.trim(), groups };
+}
+
+/**
+ * Destinos de um agendamento: os grupos avulsos e, depois, os das listas
+ * que ele referencia, na ordem escolhida e sem repetição. Lista que não
+ * existe mais contribui com nada (a validação do arquivo já a recusa).
+ * @param {{groups?: string[], groupLists?: string[]}} schedule
+ * @param {Array<{id: string, groups: string[]}>} groupLists Cadastro de listas.
+ * @returns {string[]}
+ */
+export function resolveTargets(schedule, groupLists = []) {
+  const byId = new Map(groupLists.map((l) => [l.id, l]));
+  const fromLists = (schedule.groupLists ?? []).flatMap((id) => byId.get(id)?.groups ?? []);
+  return normalizeGroups([...(schedule.groups ?? []), ...fromLists]);
+}
+
+function isIsoOrNull(value) {
+  return value == null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+}
+
+/**
  * Valida e normaliza um agendamento.
+ * Campos opcionais (at, groupLists, firedAt, missedAt) só aparecem no
+ * retorno quando presentes: o arquivo de quem não os usa não muda.
  * @param {Record<string, unknown>} raw Agendamento cru.
- * @param {{defaultGroups?: string[], messageIds?: Set<string>}} [context]
- *   messageIds: ids válidos da biblioteca; quando informado, "messageId" é conferido.
+ * @param {{defaultGroups?: string[], messageIds?: Set<string>, listIds?: Set<string>}} [context]
+ *   messageIds: ids válidos da biblioteca; listIds: ids válidos de "groupLists".
+ *   Quando informados, "messageId" e "groupLists" são conferidos.
  * @param {number} [index] Posição no array "schedules" (rotula erros sem nome como #1, #2, ...).
- * @returns {{id: string, name: string, cron: string, messageId: string, groups: string[], enabled: boolean}}
+ * @returns {{id: string, name: string, cron?: string, at?: string, messageId: string, groups: string[],
+ *            groupLists?: string[], enabled: boolean, firedAt?: string, missedAt?: string}}
  */
 export function validateSchedule(raw, context = {}, index) {
-  const { defaultGroups = [], messageIds = null } = context;
+  const { defaultGroups = [], messageIds = null, listIds = null } = context;
 
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     fail('Agendamento: cada item de "schedules" deve ser um objeto.');
@@ -124,16 +199,40 @@ export function validateSchedule(raw, context = {}, index) {
   if (typeof raw.name !== 'string' || !raw.name.trim()) {
     fail(`Agendamento ${label}: campo "name" é obrigatório e deve ser um texto.`);
   }
-  if (typeof raw.cron !== 'string' || !raw.cron.trim()) {
-    fail(`Agendamento "${label}": campo "cron" é obrigatório e deve ser um texto.`);
+
+  // Repetição (cron) ou envio único (at): exatamente um dos dois.
+  const hasCron = raw.cron != null && raw.cron !== '';
+  const hasAt = raw.at != null && raw.at !== '';
+  if (hasCron === hasAt) {
+    fail(`Agendamento "${label}": informe "cron" (repetição) ou "at" (envio único), um dos dois.`);
   }
-  const cron = checkCron(raw.cron);
-  if (!cron.valid) {
-    fail(
-      `Agendamento "${label}": expressão cron inválida "${raw.cron}"` +
-        `${cron.reason ? ` — não é registrável: ${cron.reason}` : ''}.`
-    );
+  if (hasCron) {
+    if (typeof raw.cron !== 'string' || !raw.cron.trim()) {
+      fail(`Agendamento "${label}": campo "cron" deve ser um texto.`);
+    }
+    const cron = checkCron(raw.cron);
+    if (!cron.valid) {
+      fail(
+        `Agendamento "${label}": expressão cron inválida "${raw.cron}"` +
+          `${cron.reason ? ` — não é registrável: ${cron.reason}` : ''}.`
+      );
+    }
+  } else if (!isWall(raw.at)) {
+    fail(`Agendamento "${label}": campo "at" deve ser uma data e hora no formato AAAA-MM-DDTHH:MM.`);
   }
+  if (!isIsoOrNull(raw.firedAt)) fail(`Agendamento "${label}": campo "firedAt" deve ser uma data ISO.`);
+  if (!isIsoOrNull(raw.missedAt)) fail(`Agendamento "${label}": campo "missedAt" deve ser uma data ISO.`);
+
+  if (raw.groupLists !== undefined && raw.groupLists !== null) {
+    if (!Array.isArray(raw.groupLists) || raw.groupLists.some((id) => typeof id !== 'string' || !id.trim())) {
+      fail(`Agendamento "${label}": campo "groupLists" deve ser uma lista de ids de listas.`);
+    }
+    for (const id of raw.groupLists) {
+      if (listIds && !listIds.has(id)) fail(`Agendamento "${label}": a lista "${id}" não existe.`);
+    }
+  }
+  const groupLists = [...new Set((raw.groupLists ?? []).map((id) => id.trim()))];
+
   if (typeof raw.messageId !== 'string' || !raw.messageId.trim()) {
     fail(`Agendamento "${label}": campo "messageId" é obrigatório.`);
   }
@@ -150,26 +249,30 @@ export function validateSchedule(raw, context = {}, index) {
     fail(`Agendamento "${label}": campo "id" deve ser um texto.`);
   }
 
-  // "groups" ausente herda defaultGroups; "groups" informado como lista vazia é
-  // erro, não herança. Com um seletor de grupos na tela, a lista vazia é uma
-  // escolha do usuário, e herdar os defaults nesse caso trocaria os
-  // destinatários em silêncio.
-  if (raw.groups !== undefined && raw.groups.length === 0) {
+  // "groups" ausente (e sem listas) herda defaultGroups; "groups" informado
+  // como lista vazia sem nenhuma lista é erro, não herança. Com um seletor
+  // de grupos na tela, a lista vazia é uma escolha do usuário, e herdar os
+  // defaults nesse caso trocaria os destinatários em silêncio. Com uma
+  // lista marcada, "groups: []" é só "nenhum grupo avulso".
+  if (raw.groups !== undefined && raw.groups.length === 0 && groupLists.length === 0) {
     fail(`Agendamento "${label}": lista de grupos vazia — selecione ao menos um grupo de destino.`);
   }
 
-  const groups = normalizeGroups(raw.groups ?? defaultGroups);
-  if (groups.length === 0) {
+  const groups = normalizeGroups(raw.groups ?? (groupLists.length === 0 ? defaultGroups : []));
+  if (groups.length === 0 && groupLists.length === 0) {
     fail(`Agendamento "${label}": nenhum grupo de destino (defina "groups" ou "defaultGroups").`);
   }
 
   return {
     id: raw.id?.trim() || newId('sch'),
     name: raw.name.trim(),
-    cron: raw.cron.trim(),
+    ...(hasCron ? { cron: raw.cron.trim() } : { at: raw.at }),
     messageId: raw.messageId,
     groups,
+    ...(groupLists.length > 0 && { groupLists }),
     enabled: raw.enabled ?? true,
+    ...(raw.firedAt != null && { firedAt: raw.firedAt }),
+    ...(raw.missedAt != null && { missedAt: raw.missedAt }),
   };
 }
 
@@ -192,9 +295,22 @@ export function normalizeStore(parsed) {
   if (parsed.schedules !== undefined && !Array.isArray(parsed.schedules)) {
     fail('Formato inválido: "schedules" deve ser uma lista.');
   }
+  if (parsed.groupLists !== undefined && !Array.isArray(parsed.groupLists)) {
+    fail('Formato inválido: "groupLists" deve ser uma lista.');
+  }
 
   const defaultGroups = normalizeGroups(parsed.defaultGroups ?? []);
   const messages = (parsed.messages ?? []).map(validateMessage);
+
+  const groupLists = (parsed.groupLists ?? []).map(validateGroupList);
+  const listNames = new Set();
+  const listIds = new Set();
+  for (const list of groupLists) {
+    if (listIds.has(list.id)) fail(`Lista de grupos "${list.id}": id duplicado.`);
+    if (listNames.has(list.name)) fail(`Lista de grupos "${list.name}": nome duplicado.`);
+    listIds.add(list.id);
+    listNames.add(list.name);
+  }
 
   // v1: agendamento com "message" textual e sem "messageId" vira mensagem sintética.
   // Os campos são validados aqui como campos de AGENDAMENTO (não de mensagem: o
@@ -224,7 +340,7 @@ export function normalizeStore(parsed) {
 
   const messageIds = new Set(messages.map((m) => m.id));
   const schedules = rawSchedules.map((raw, index) =>
-    validateSchedule(raw, { defaultGroups, messageIds }, index)
+    validateSchedule(raw, { defaultGroups, messageIds, listIds }, index)
   );
 
   const names = new Set();
@@ -233,6 +349,12 @@ export function normalizeStore(parsed) {
       fail(`Agendamento "${schedule.name}": nome duplicado.`);
     }
     names.add(schedule.name);
+    // Uma lista pode existir e estar vazia de grupos válidos só em teoria
+    // (validateGroupList exige ao menos um); a checagem cobre o caso de
+    // "groups: []" com listas que, somadas, não trazem ninguém.
+    if (resolveTargets(schedule, groupLists).length === 0) {
+      fail(`Agendamento "${schedule.name}": nenhum grupo de destino nas listas escolhidas.`);
+    }
   }
 
   const seenMessageIds = new Set();
@@ -252,14 +374,15 @@ export function normalizeStore(parsed) {
     seenMessageNames.add(msg.name);
   }
 
-  return { version: 2, defaultGroups, messages, schedules };
+  return { version: 2, defaultGroups, groupLists, messages, schedules };
 }
 
 /**
  * Lê e valida o arquivo de agendamentos, resolvendo o texto de cada mensagem.
  * @param {string} [path] Caminho do arquivo (default: config.schedulesPath).
- * @returns {{version: 2, defaultGroups: string[], messages: object[], schedules: object[]}}
- *   Cada agendamento traz também "message" com o texto já resolvido.
+ * @returns {{version: 2, defaultGroups: string[], groupLists: object[], messages: object[], schedules: object[]}}
+ *   Cada agendamento traz também "message" (texto resolvido), "media" e
+ *   "targets" (grupos avulsos mais os das listas, sem repetição).
  */
 export function loadSchedules(path = config.schedulesPath) {
   let raw;
@@ -290,6 +413,7 @@ export function loadSchedules(path = config.schedulesPath) {
       ...s,
       message: byId.get(s.messageId)?.text,
       media: byId.get(s.messageId)?.media ?? null,
+      targets: resolveTargets(s, store.groupLists),
     })),
   };
 }

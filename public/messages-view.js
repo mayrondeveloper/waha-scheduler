@@ -127,6 +127,7 @@ export function messageList({ messages, schedules }) {
         <div class="row-sub">${usedBy.length ? `Usada por ${escape(usedBy.join(', '))}` : 'Não usada'}</div>
         <div class="row-actions">
           <button type="button" class="icon-btn" data-action="edit-message" data-id="${id}" title="Editar" aria-label="Editar ${escape(m.name)}">${icon('pencil')}</button>
+          <button type="button" class="icon-btn" data-action="duplicate-message" data-id="${id}" title="Duplicar" aria-label="Duplicar ${escape(m.name)}">${icon('copy')}</button>
           <button type="button" class="icon-btn danger" data-action="delete-message" data-id="${id}" title="Excluir" aria-label="Excluir ${escape(m.name)}">${icon('trash')}</button>
         </div>
       </li>`;
