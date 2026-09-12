@@ -4,13 +4,31 @@ import { readFileSync } from 'node:fs';
 import { config } from './config.js';
 import { appendSendLog, info, error as logError } from './logger.js';
 import * as wahaClient from './waha/client.js';
+import { recentSends, HOUR_MS } from './send-log.js';
+import { spin } from '../public/spintax.js';
 
 // Limite de legenda do WhatsApp. Acima disso, o anexo vai sem legenda e o
 // texto segue em mensagem separada.
 const CAPTION_MAX = 1024;
 
-function sleep(ms) {
+function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Freio por hora: com o limite atingido na última hora (contando o que o
+// agendador e a tela já mandaram), espera até o envio mais antigo da janela
+// sair dela. É um freio, não uma fila: o disparo fica em pé e continua.
+async function throttle(chatId, { hourlyLimit, logPath, now, sleep }) {
+  let waitedMs = 0;
+  if (!hourlyLimit) return waitedMs;
+  for (;;) {
+    const recent = recentSends(logPath, { windowMs: HOUR_MS, now: now() });
+    if (recent.length < hourlyLimit) return waitedMs;
+    const waitMs = Math.max(1000, recent[0] + HOUR_MS - now() + 1000);
+    info(`Limite de ${hourlyLimit} envios por hora atingido: esperando ${Math.ceil(waitMs / 1000)} s antes de enviar para ${chatId}.`);
+    await sleep(waitMs);
+    waitedMs += waitMs;
+  }
 }
 
 function randomDelay(cfg) {
@@ -66,19 +84,28 @@ async function sendWithMedia(client, chatId, text, file, media, cfg) {
 
 /**
  * Envia a mesma mensagem para vários grupos, seguindo em frente quando um falha.
- * @param {string} message Texto a enviar.
+ * Cada grupo recebe uma variação sorteada do spintax; o texto que saiu vai
+ * no log.
+ * @param {string} message Texto a enviar (pode ter spintax).
  * @param {string[]} groups Ids dos grupos de destino.
  * @param {{client?: {sendText: Function, sendMedia?: Function}, cfg?: object, label?: string,
- *          media?: {kind: string, filename: string, mimetype: string, path: string}|null}} [options]
+ *          media?: {kind: string, filename: string, mimetype: string, path: string}|null,
+ *          hourlyLimit?: number, extra?: object, random?: () => number, now?: () => number,
+ *          sleep?: (ms: number) => Promise<void>}} [options]
  *   client: implementação injetável do WAHA (default: cliente real).
  *   media: anexo com o caminho do arquivo; o texto vira legenda quando cabe.
+ *   hourlyLimit: freio por hora (0 desliga); extra: campos a mais em cada
+ *   linha do log (ex.: deferredFrom); random/now/sleep: injetáveis nos testes.
  * @returns {Promise<{sent: number, failed: number, results: Array<{chatId: string, status: 'sent'|'error', error?: string}>}>}
  */
 export async function broadcast(message, groups, options = {}) {
-  const { client = wahaClient, cfg = config, label = null, media = null } = options;
+  const {
+    client = wahaClient, cfg = config, label = null, media = null, hourlyLimit = 0, extra = {},
+    random = Math.random, now = Date.now, sleep = defaultSleep,
+  } = options;
 
-  const text = String(message ?? '').trim();
-  if (!text) {
+  const source = String(message ?? '').trim();
+  if (!source) {
     throw new Error('Mensagem vazia: informe um texto para enviar.');
   }
 
@@ -92,15 +119,19 @@ export async function broadcast(message, groups, options = {}) {
   const results = [];
 
   for (const [index, chatId] of targets.entries()) {
+    const text = spin(source, random);
+    const waitedMs = await throttle(chatId, { hourlyLimit, logPath: cfg.logPath, now, sleep });
+    // O instante vem do mesmo relógio do freio: é ele que a próxima contagem lê.
+    const logExtra = { ts: new Date(now()).toISOString(), ...extra, ...(waitedMs > 0 && { waitedMs }) };
     try {
       if (file) await sendWithMedia(client, chatId, text, file, media, cfg);
       else await client.sendText(chatId, text, cfg);
       results.push({ chatId, status: 'sent' });
-      appendSendLog({ status: 'sent', chatId, message: text, label, ...logMedia }, cfg.logPath);
+      appendSendLog({ status: 'sent', chatId, message: text, label, ...logMedia, ...logExtra }, cfg.logPath);
       info(`Enviado para ${chatId}`);
     } catch (err) {
       results.push({ chatId, status: 'error', error: err.message });
-      appendSendLog({ status: 'error', chatId, message: text, label, ...logMedia, error: err.message }, cfg.logPath);
+      appendSendLog({ status: 'error', chatId, message: text, label, ...logMedia, ...logExtra, error: err.message }, cfg.logPath);
       logError(err.message);
     }
 
